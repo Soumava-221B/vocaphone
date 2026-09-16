@@ -32,6 +32,7 @@ import com.vocahq.vocaphone.gateway.GatewayAudioStream
 import com.vocahq.vocaphone.gateway.GatewayStreamingPolicy
 import com.vocahq.vocaphone.gateway.StreamingUnavailableException
 import com.vocahq.vocaphone.local.LocalModelManager
+import com.vocahq.vocaphone.local.LocalModelState
 import com.vocahq.vocaphone.local.LocalTranscription
 import com.vocahq.vocaphone.local.SherpaIncrementalSession
 import com.vocahq.vocaphone.settings.VocaPhoneSettings
@@ -62,6 +63,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -199,6 +201,9 @@ class DictationController(
                         missingPermissions = setOf(repair),
                         modelDownloadProgress = models.progress.takeIf { repair == MissingPermission.MODEL_DOWNLOADING },
                     )
+                    if (repair == MissingPermission.MODEL_DOWNLOADING) {
+                        followDownload(alreadyOnDisk = models.downloaded)
+                    }
                     return@launch
                 }
             }
@@ -1081,6 +1086,28 @@ class DictationController(
         _state.value = DictationState()
     }
 
+    private suspend fun followDownload(alreadyOnDisk: Set<String>) {
+        val outcome = localModels.state
+            .map { latest ->
+                downloadOutcome(latest, alreadyOnDisk).also {
+                    if (it == DownloadOutcome.WAITING) {
+                        _state.update { state -> state.copy(modelDownloadProgress = latest.progress) }
+                    }
+                }
+            }
+            .first { it != DownloadOutcome.WAITING }
+        when (outcome) {
+            DownloadOutcome.LANDED -> reset()
+            DownloadOutcome.DIED -> _state.update {
+                it.copy(
+                    missingPermissions = setOf(MissingPermission.MODEL_MISSING),
+                    modelDownloadProgress = null,
+                )
+            }
+            DownloadOutcome.WAITING -> Unit
+        }
+    }
+
     /**
      * How far the dictation got, from the error that ended it.
      *
@@ -1161,3 +1188,12 @@ class DictationController(
         const val STREAM_FRAME_BUFFER_CAPACITY = 96
     }
 }
+
+internal enum class DownloadOutcome { WAITING, LANDED, DIED }
+
+internal fun downloadOutcome(latest: LocalModelState, alreadyOnDisk: Set<String>): DownloadOutcome =
+    when {
+        (latest.downloaded - alreadyOnDisk).isNotEmpty() -> DownloadOutcome.LANDED
+        latest.downloading == null -> DownloadOutcome.DIED
+        else -> DownloadOutcome.WAITING
+    }

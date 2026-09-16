@@ -37,6 +37,7 @@ data class ModelGuidanceResult(
     val intent: ModelGuidanceIntent,
     val confidence: ModelGuidanceConfidence,
     val reason: String,
+    val explicitLanguage: Boolean = true,
 ) {
     val languageName: String
         get() = guidanceLanguageName(intent.language)
@@ -84,6 +85,7 @@ object ModelGuidance {
                 model = null,
                 intent = intent.copy(language = language),
                 confidence = ModelGuidanceConfidence.NO_MATCH,
+                explicitLanguage = !automatic,
                 reason = "No on-device model in this build supports ${guidanceLanguageName(language)} on this phone.",
             )
         }
@@ -131,6 +133,7 @@ object ModelGuidance {
             intent = normalized,
             confidence = ModelGuidanceConfidence.GOOD_DEFAULT,
             reason = reason,
+            explicitLanguage = !automatic,
         )
     }
 }

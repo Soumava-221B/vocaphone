@@ -126,6 +126,7 @@ fun SetupScreen(
     status: SetupStatus,
     settings: VocaPhoneSettings,
     localModels: LocalModelState,
+    deviceLanguages: List<String> = emptyList(),
     onOpenGateway: () -> Unit,
     onLanguage: (TranscriptionLanguage) -> Unit,
     onLocalTranscriptionEnabled: (Boolean) -> Unit,
@@ -309,6 +310,7 @@ fun SetupScreen(
                             },
                             onCancelDownload = onCancelLocalModelDownload,
                             guidanceLanguage = settings.language.wireValue,
+                            languages = deviceLanguages,
                             onGuidanceLanguage = { onLanguage(TranscriptionLanguage.fromWire(it)) },
                         )
                     } else {

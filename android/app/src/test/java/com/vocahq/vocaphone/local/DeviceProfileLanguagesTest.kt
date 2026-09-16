@@ -164,4 +164,42 @@ class DeviceProfileLanguagesTest {
     fun anUnknownPrimaryIsKeptButAnUnknownSecondaryIsNot() {
         assertEquals(listOf("xx", "ru"), DeviceProfile.normalizeLanguages("xx", listOf("ru", "yy")))
     }
+
+    // --- the picker's path: the intent arrives unresolved -----------------
+
+    /**
+     * The picker hands guidance the raw selection — "auto" or a code — and
+     * guidance resolves it. This is the case the emulator walk missed: an
+     * English-UI phone with a Russian keyboard, automatic language. The lead
+     * card must cover Russian, and the result must say the language was
+     * detected rather than chosen.
+     */
+    @Test
+    fun anAutomaticIntentReachesTheKeyboardLanguages() {
+        val profile = phone(listOf("en", "ru"))
+        val result = ModelGuidance.recommend(
+            profile,
+            ModelGuidanceIntent(language = com.vocahq.vocaphone.core.TranscriptionLanguage.AUTOMATIC.wireValue),
+        )
+        assertFalse("automatic is not explicit", result.explicitLanguage)
+        assertTrue("the lead model covers the keyboard language", result.model!!.coversLanguage("ru"))
+    }
+
+    @Test
+    fun choosingThePrimaryLanguageByHandIsStillExplicit() {
+        val profile = phone(listOf("en", "ru"))
+        val result = ModelGuidance.recommend(profile, ModelGuidanceIntent(language = "en"))
+        assertTrue("a hand-picked code is explicit even when it equals the primary", result.explicitLanguage)
+        assertEquals("en", result.intent.language)
+        val picks = LocalModelCatalog.recommendations(
+            if (result.explicitLanguage) profile.withExplicitLanguage(result.intent.language) else profile,
+        ).map { it.model.id }
+        assertEquals("parakeet-tdt-0.6b-v2-en", picks.first())
+    }
+
+    @Test
+    fun aBlankIntentIsAutomatic() {
+        val result = ModelGuidance.recommend(phone(listOf("en", "ru")), ModelGuidanceIntent(language = ""))
+        assertFalse(result.explicitLanguage)
+    }
 }

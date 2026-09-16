@@ -38,7 +38,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,41 +85,24 @@ fun LocalModelPicker(
     compact: Boolean = false,
     guidanceLanguage: String = "",
     onGuidanceLanguage: (String) -> Unit = {},
+    languages: List<String> = emptyList(),
 ) {
     val usable = remember(state.totalRamGB) {
         LocalModelCatalog.usableOnDevice(state.totalRamGB).sortedBy { it.sizeBytes }
     }
-    val context = LocalContext.current
-    val profile = remember(state.totalRamGB) {
-        // Both sources iOS reads: the phone's language list and the enabled
-        // keyboards. A phone set to English with a Russian keyboard belongs to
-        // a Russian speaker, and the UI language alone would never say so.
-        DeviceProfile.current(
-            totalRamGB = state.totalRamGB,
-            languages = DeviceProfile.phoneLanguages() + KeyboardInputLanguages.enabled(context),
-        )
+    val profile = remember(state.totalRamGB, languages) {
+        DeviceProfile.current(totalRamGB = state.totalRamGB, languages = languages)
     }
     var guidancePriority by rememberSaveable { mutableStateOf(ModelGuidancePriority.BALANCED) }
     var guidanceOpen by rememberSaveable { mutableStateOf(false) }
     var guidanceLanguageSelection by rememberSaveable(guidanceLanguage, profile.language) {
         mutableStateOf(guidanceLanguage.ifBlank { TranscriptionLanguage.AUTOMATIC.wireValue })
     }
-    val selectedGuidanceLanguage = if (
-        guidanceLanguageSelection.isBlank() ||
-            guidanceLanguageSelection == TranscriptionLanguage.AUTOMATIC.wireValue
-    ) {
-        profile.language
-    } else {
-        guidanceLanguageSelection
-    }
-    val guidanceProfile = remember(profile, selectedGuidanceLanguage) {
-        profile.copy(language = selectedGuidanceLanguage)
-    }
-    val guidance = remember(guidanceProfile, guidancePriority) {
+    val guidance = remember(profile, guidanceLanguageSelection, guidancePriority) {
         ModelGuidance.recommend(
-            guidanceProfile,
+            profile,
             ModelGuidanceIntent(
-                language = guidanceProfile.language,
+                language = guidanceLanguageSelection,
                 priority = guidancePriority,
             ),
         )
@@ -129,11 +111,11 @@ fun LocalModelPicker(
     // concrete swap rather than a grid: the setup card stays a single answer,
     // but the fact that a 32 MB option exists no longer lives only behind a
     // sheet most people never open.
-    val lighter = remember(guidanceProfile) {
+    val lighter = remember(profile, guidanceLanguageSelection) {
         ModelGuidance.recommend(
-            guidanceProfile,
+            profile,
             ModelGuidanceIntent(
-                language = guidanceProfile.language,
+                language = guidanceLanguageSelection,
                 priority = ModelGuidancePriority.LIGHTER,
             ),
         ).model
@@ -150,13 +132,9 @@ fun LocalModelPicker(
         }
     // Settings keeps the richer role-based catalog. Setup gets one answer so
     // people do not have to compare several technical model names.
-    val picks = remember(profile, guidance.intent.language) {
-        // Same rule as ModelGuidance: automatic keeps the detected list, a
-        // hand-picked language replaces it.
-        val explicit = guidance.intent.language.isNotBlank() &&
-            guidance.intent.language != profile.language
+    val picks = remember(profile, guidance.intent.language, guidance.explicitLanguage) {
         LocalModelCatalog.recommendations(
-            if (explicit) profile.withExplicitLanguage(guidance.intent.language) else profile,
+            if (guidance.explicitLanguage) profile.withExplicitLanguage(guidance.intent.language) else profile,
         )
     }
     val recommended = if (compact) guidance.model ?: picks.first().model else picks.first().model

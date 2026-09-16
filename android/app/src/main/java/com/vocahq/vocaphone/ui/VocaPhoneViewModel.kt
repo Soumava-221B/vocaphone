@@ -24,6 +24,7 @@ import com.vocahq.vocaphone.dictation.DictationService
 import com.vocahq.vocaphone.dictation.DictationSource
 import com.vocahq.vocaphone.gateway.GatewayClient
 import com.vocahq.vocaphone.gateway.GatewayException
+import com.vocahq.vocaphone.local.DeviceProfile
 import com.vocahq.vocaphone.local.LocalModelDescriptor
 import com.vocahq.vocaphone.local.LocalModelIntegrityException
 import com.vocahq.vocaphone.local.LocalModelState
@@ -84,9 +85,17 @@ data class MicrophoneStatus(
     }
 }
 
-class VocaPhoneViewModel(application: Application) : AndroidViewModel(application) {
+class VocaPhoneViewModel @JvmOverloads constructor(
+    application: Application,
+    private val languageSource: () -> List<String> = {
+        DeviceProfile.phoneLanguages() + KeyboardInputLanguages.enabled(application)
+    },
+) : AndroidViewModel(application) {
 
     private val container = VocaPhoneApplication.container(application)
+
+    private val _deviceLanguages = MutableStateFlow<List<String>>(emptyList())
+    val deviceLanguages: StateFlow<List<String>> = _deviceLanguages.asStateFlow()
 
     val settings: StateFlow<VocaPhoneSettings> = container.settings.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), VocaPhoneSettings())
@@ -173,6 +182,13 @@ class VocaPhoneViewModel(application: Application) : AndroidViewModel(applicatio
                 .drop(1)
                 .collect { refreshSetup() }
         }
+        viewModelScope.launch {
+            settings
+                .map { it.localModelId to it.localTranscriptionEnabled }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { refreshSetup() }
+        }
     }
 
     override fun onCleared() {
@@ -187,6 +203,7 @@ class VocaPhoneViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun refreshSetup() {
+        _deviceLanguages.value = runCatching(languageSource).getOrDefault(emptyList())
         viewModelScope.launch {
             // Cheap, and stale here is wrong in the direction that matters: the
             // setup card decides whether to warn about a 670 MB download from

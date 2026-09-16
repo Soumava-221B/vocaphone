@@ -17,6 +17,7 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -104,7 +105,9 @@ class LocalModelManager(
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)
         .build(),
-    private val downloadScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val downloadScope: CoroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, _ -> },
+    ),
 ) {
     private val appContext = context.applicationContext
     private val modelRoot = File(appContext.filesDir, LOCAL_MODELS_DIR).also { it.mkdirs() }
@@ -262,10 +265,10 @@ class LocalModelManager(
         return job
     }
 
-    /** Cancels the in-flight HTTP request and the process-scoped download job. */
+    
     fun cancelDownload() {
-        activeDownloadCall.get()?.cancel()
         activeDownloadJob.getAndSet(null)?.cancel()
+        activeDownloadCall.get()?.cancel()
     }
 
     /**

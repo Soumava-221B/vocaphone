@@ -119,6 +119,7 @@ fun VocaPhoneApp(
     val testing by viewModel.testing.collectAsStateWithLifecycle()
     val microphone by viewModel.microphone.collectAsStateWithLifecycle()
     val localModels by viewModel.localModels.collectAsStateWithLifecycle()
+    val deviceLanguages by viewModel.deviceLanguages.collectAsStateWithLifecycle()
     val usageStats by viewModel.usageStats.collectAsStateWithLifecycle()
     val tonePreviewListening by viewModel.tonePreviewListening.collectAsStateWithLifecycle()
 
@@ -323,6 +324,7 @@ fun VocaPhoneApp(
                 status = setup,
                 settings = settings,
                 localModels = localModels,
+                deviceLanguages = deviceLanguages,
                 onOpenGateway = { showingGateway = true },
                 onLanguage = viewModel::setLanguage,
                 onLocalTranscriptionEnabled = viewModel::setLocalTranscriptionEnabled,
@@ -438,6 +440,7 @@ fun VocaPhoneApp(
                 onClipboardChip = { viewModel.setClipboardChipEnabled(it) },
                 onClipboardHistory = { viewModel.setClipboardHistoryEnabled(it) },
                 localModels = localModels,
+                deviceLanguages = deviceLanguages,
                 onLocalTranscriptionEnabled = viewModel::setLocalTranscriptionEnabled,
                 onLocalModel = viewModel::setLocalModel,
                 onDownloadLocalModel = viewModel::downloadLocalModel,
