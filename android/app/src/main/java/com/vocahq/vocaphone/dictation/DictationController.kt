@@ -186,14 +186,7 @@ class DictationController(
             }
             if (configuration.localTranscriptionEnabled) {
                 val models = localModels.state.value
-                val id = configuration.localModelId
-                val repair = when {
-                    id.isNotEmpty() && id in models.downloaded -> null
-                    // The id is written when the file lands, so mid-download it
-                    // may still be empty; the download itself is the signal.
-                    models.downloading != null -> MissingPermission.MODEL_DOWNLOADING
-                    else -> MissingPermission.MODEL_MISSING
-                }
+                val repair = modelRepair(configuration.localModelId, models)
                 if (repair != null) {
                     diagnostics.recordError("setup", source.name)
                     _state.value = DictationState(
@@ -202,7 +195,7 @@ class DictationController(
                         modelDownloadProgress = models.progress.takeIf { repair == MissingPermission.MODEL_DOWNLOADING },
                     )
                     if (repair == MissingPermission.MODEL_DOWNLOADING) {
-                        followDownload(alreadyOnDisk = models.downloaded)
+                        followDownload(target = models.downloading!!)
                     }
                     return@launch
                 }
@@ -1086,10 +1079,10 @@ class DictationController(
         _state.value = DictationState()
     }
 
-    private suspend fun followDownload(alreadyOnDisk: Set<String>) {
+    private suspend fun followDownload(target: String) {
         val outcome = localModels.state
             .map { latest ->
-                downloadOutcome(latest, alreadyOnDisk).also {
+                downloadOutcome(latest, target).also {
                     if (it == DownloadOutcome.WAITING) {
                         _state.update { state -> state.copy(modelDownloadProgress = latest.progress) }
                     }
@@ -1189,11 +1182,21 @@ class DictationController(
     }
 }
 
+internal fun modelRepair(configuredId: String, models: LocalModelState): MissingPermission? {
+    val target = models.pendingUse ?: configuredId.takeIf { it.isNotEmpty() }
+    return when {
+        configuredId.isNotEmpty() && configuredId in models.downloaded -> null
+        target != null && models.downloading == target -> MissingPermission.MODEL_DOWNLOADING
+        target != null && target in models.downloaded -> null
+        else -> MissingPermission.MODEL_MISSING
+    }
+}
+
 internal enum class DownloadOutcome { WAITING, LANDED, DIED }
 
-internal fun downloadOutcome(latest: LocalModelState, alreadyOnDisk: Set<String>): DownloadOutcome =
+internal fun downloadOutcome(latest: LocalModelState, target: String): DownloadOutcome =
     when {
-        (latest.downloaded - alreadyOnDisk).isNotEmpty() -> DownloadOutcome.LANDED
-        latest.downloading == null -> DownloadOutcome.DIED
+        target in latest.downloaded -> DownloadOutcome.LANDED
+        latest.downloading != target -> DownloadOutcome.DIED
         else -> DownloadOutcome.WAITING
     }

@@ -27,6 +27,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -56,6 +57,7 @@ data class LocalTranscription(val text: String, val language: String = "")
 data class LocalModelState(
     val downloaded: Set<String> = emptySet(),
     val downloading: String? = null,
+    val pendingUse: String? = null,
     val progress: Int = 0,
     val message: String? = null,
     /** Reported so the picker can hide models this phone cannot run. */
@@ -257,15 +259,21 @@ class LocalModelManager(
      * Starts a download on [downloadScope] so leaving setup or settings does
      * not cancel it. Only [cancelDownload] stops an in-flight job.
      */
-    fun startDownload(model: LocalModelDescriptor): Job {
+    fun startDownload(model: LocalModelDescriptor, useWhenReady: Boolean = false): Job {
         cancelDownload()
-        val job = downloadScope.launch { download(model) }
+        val job = downloadScope.launch { download(model, useWhenReady) }
         activeDownloadJob.set(job)
         job.invokeOnCompletion { activeDownloadJob.compareAndSet(job, null) }
         return job
     }
 
-    
+    fun markAdopted(id: String) {
+        _state.update { if (it.pendingUse == id) it.copy(pendingUse = null) else it }
+    }
+
+    fun clearPendingUse(id: String) = markAdopted(id)
+
+
     fun cancelDownload() {
         activeDownloadJob.getAndSet(null)?.cancel()
         activeDownloadCall.get()?.cancel()
@@ -283,7 +291,7 @@ class LocalModelManager(
         )
     }
 
-    suspend fun download(model: LocalModelDescriptor) = downloadMutex.withLock {
+    suspend fun download(model: LocalModelDescriptor, useWhenReady: Boolean = false) = downloadMutex.withLock {
         // Checked here rather than only in the picker: a download reaching 95%
         // and then failing on a full phone is minutes of the user's time and an
         // error that does not say what to delete.
@@ -317,6 +325,7 @@ class LocalModelManager(
             staging.mkdirs()
             _state.value = _state.value.copy(
                 downloading = model.id,
+                pendingUse = if (useWhenReady) model.id else _state.value.pendingUse,
                 progress = 0,
                 message = null,
                 downloadedBytes = 0,
@@ -359,17 +368,19 @@ class LocalModelManager(
             } catch (error: CancellationException) {
                 staging.deleteRecursively()
                 _state.value = _state.value.copy(message = "Model download canceled.")
+                    .withoutPendingUse(model.id)
                 throw error
             } catch (error: Throwable) {
                 if (!currentCoroutineContext().isActive) {
                     staging.deleteRecursively()
                     _state.value = _state.value.copy(message = "Model download canceled.")
+                        .withoutPendingUse(model.id)
                     throw CancellationException("Model download canceled", error)
                 }
                 staging.deleteRecursively()
                 _state.value = _state.value.copy(
                     message = error.localizedMessage ?: "Model download failed",
-                )
+                ).withoutPendingUse(model.id)
                 throw error
             } finally {
                 _state.value = _state.value.copy(
@@ -806,3 +817,7 @@ internal fun LocalModelDescriptor.resolveTranslationTarget(
  */
 internal fun canStreamIncrementally(engine: LocalModelEngine, translateTo: String): Boolean =
     engine == LocalModelEngine.SHERPA_ONNX && translateTo.isEmpty()
+
+/** [LocalModelState.pendingUse] cleared, but only if it names [id]: a newer download's intent is not this one's to drop. */
+private fun LocalModelState.withoutPendingUse(id: String): LocalModelState =
+    if (pendingUse == id) copy(pendingUse = null) else this

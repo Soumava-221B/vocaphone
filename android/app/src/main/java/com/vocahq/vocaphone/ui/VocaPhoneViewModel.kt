@@ -565,7 +565,7 @@ class VocaPhoneViewModel @JvmOverloads constructor(
     }
 
     private fun startLocalModelDownload(model: LocalModelDescriptor, useWhenReady: Boolean) {
-        val job = container.localModels.startDownload(model)
+        val job = container.localModels.startDownload(model, useWhenReady = useWhenReady)
         localModelDownloadJob = job
         job.invokeOnCompletion { cause ->
             if (localModelDownloadJob === job) localModelDownloadJob = null
@@ -609,10 +609,12 @@ class VocaPhoneViewModel @JvmOverloads constructor(
                                 throw error
                             } catch (_: Exception) {
                                 container.localModels.reportPreparationFailure(model)
+                                container.localModels.clearPendingUse(model.id)
                                 return@launch
                             }
                             container.settings.setLocalModel(model.id)
                             container.settings.setLocalTranscriptionEnabled(true)
+                            container.localModels.markAdopted(model.id)
                             refreshSetup()
                         }
                     }

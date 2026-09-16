@@ -1,50 +1,101 @@
 package com.vocahq.vocaphone.dictation
 
+import com.vocahq.vocaphone.core.MissingPermission
 import com.vocahq.vocaphone.local.LocalModelState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * The three exits of a keyboard mic tap taken while a model is downloading.
+ * What a keyboard mic tap does while on-device dictation cannot start, and
+ * how a wait on a download ends.
  *
- * The repair state used to snapshot the percentage once and never move; the
- * keyboard then showed a frozen number and could not start dictation until
- * something else reset it. The wait now follows the download, and these are
- * the rules it follows.
+ * Both used to treat *any* download as the one that mattered: with the
+ * configured model missing and an unrelated download running, the keyboard
+ * said "downloading", and that unrelated file landing cleared the repair it
+ * had nothing to do with. The state now carries which download will be used,
+ * and these are the rules that read it.
  */
 class DownloadFollowTest {
 
-    private val before = setOf("tiny-q5_1")
+    private val parakeet = "parakeet-tdt-0.6b-v2-en"
+    private val tiny = "tiny-q5_1"
+
+    // --- modelRepair: why dictation cannot start -----------------------------
 
     @Test
-    fun aRunningDownloadIsAWait() {
-        val state = LocalModelState(downloaded = before, downloading = "parakeet-tdt-0.6b-v2-en", progress = 40)
-        assertEquals(DownloadOutcome.WAITING, downloadOutcome(state, before))
-    }
-
-    /** Done means a file that was not there at entry — the chosen id is written later. */
-    @Test
-    fun aNewFileOnDiskMeansItLanded() {
-        val state = LocalModelState(downloaded = before + "parakeet-tdt-0.6b-v2-en", downloading = null)
-        assertEquals(DownloadOutcome.LANDED, downloadOutcome(state, before))
+    fun aConfiguredModelOnDiskNeedsNoRepair() {
+        assertNull(modelRepair(parakeet, LocalModelState(downloaded = setOf(parakeet))))
     }
 
     @Test
-    fun landedWinsEvenIfAnotherDownloadHasAlreadyStarted() {
-        val state = LocalModelState(downloaded = before + "parakeet-tdt-0.6b-v2-en", downloading = "canary-180m-flash")
-        assertEquals(DownloadOutcome.LANDED, downloadOutcome(state, before))
+    fun theDownloadTheAppIntendsToUseIsAWait() {
+        val state = LocalModelState(downloading = parakeet, pendingUse = parakeet, progress = 40)
+        assertEquals(MissingPermission.MODEL_DOWNLOADING, modelRepair("", state))
     }
 
     @Test
-    fun aDownloadThatStopsWithoutLandingDied() {
-        val state = LocalModelState(downloaded = before, downloading = null)
-        assertEquals(DownloadOutcome.DIED, downloadOutcome(state, before))
+    fun theConfiguredModelReDownloadingIsAWaitToo() {
+        val state = LocalModelState(downloading = parakeet)
+        assertEquals(MissingPermission.MODEL_DOWNLOADING, modelRepair(parakeet, state))
     }
 
-    /** A file that was already there at entry is not this download landing. */
+    /** The window between the file arriving and the id being persisted. */
     @Test
-    fun filesPresentAtEntryDoNotCountAsLanding() {
-        val state = LocalModelState(downloaded = before, downloading = "parakeet-tdt-0.6b-v2-en", progress = 5)
-        assertEquals(DownloadOutcome.WAITING, downloadOutcome(state, before))
+    fun aPendingModelOnDiskButNotYetChosenNeedsNoRepair() {
+        val state = LocalModelState(downloaded = setOf(parakeet), pendingUse = parakeet)
+        assertNull(modelRepair("", state))
+    }
+
+    /**
+     * Greptile's case. The configured model is gone and something *else* is
+     * downloading. That is not a wait — nothing on its way will fix this —
+     * so the answer is "choose a model", not "downloading".
+     */
+    @Test
+    fun anUnrelatedDownloadIsNotAReasonToWait() {
+        val state = LocalModelState(downloading = tiny, progress = 30)
+        assertEquals(MissingPermission.MODEL_MISSING, modelRepair(parakeet, state))
+    }
+
+    @Test
+    fun nothingConfiguredAndNothingComingIsMissing() {
+        assertEquals(MissingPermission.MODEL_MISSING, modelRepair("", LocalModelState()))
+        assertEquals(MissingPermission.MODEL_MISSING, modelRepair(parakeet, LocalModelState(downloaded = setOf(tiny))))
+    }
+
+    // --- downloadOutcome: how the wait ends ---------------------------------
+
+    @Test
+    fun theTargetStillDownloadingIsAWait() {
+        assertEquals(DownloadOutcome.WAITING, downloadOutcome(LocalModelState(downloading = parakeet, progress = 40), parakeet))
+    }
+
+    @Test
+    fun theTargetOnDiskLanded() {
+        assertEquals(DownloadOutcome.LANDED, downloadOutcome(LocalModelState(downloaded = setOf(parakeet)), parakeet))
+    }
+
+    /** The other half of Greptile's case: a different file landing is not this wait ending. */
+    @Test
+    fun anUnrelatedModelLandingDoesNotEndTheWait() {
+        val state = LocalModelState(downloaded = setOf(tiny), downloading = parakeet, progress = 55)
+        assertEquals(DownloadOutcome.WAITING, downloadOutcome(state, parakeet))
+    }
+
+    @Test
+    fun theTargetStoppingWithoutLandingDied() {
+        assertEquals(DownloadOutcome.DIED, downloadOutcome(LocalModelState(downloading = null), parakeet))
+    }
+
+    @Test
+    fun theTargetBeingReplacedByAnotherDownloadDied() {
+        assertEquals(DownloadOutcome.DIED, downloadOutcome(LocalModelState(downloading = tiny), parakeet))
+    }
+
+    @Test
+    fun landedWinsOverAReplacementThatStartedAfterwards() {
+        val state = LocalModelState(downloaded = setOf(parakeet), downloading = tiny)
+        assertEquals(DownloadOutcome.LANDED, downloadOutcome(state, parakeet))
     }
 }

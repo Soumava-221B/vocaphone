@@ -32,7 +32,7 @@ data class DeviceProfile(
     val language: String = "en",
     val languages: List<String> = listOf(language),
 ) {
-    
+
     val englishOnly: Boolean get() = language == "en" && languages.all { it == "en" }
 
     fun withExplicitLanguage(chosen: String): DeviceProfile {
@@ -112,7 +112,6 @@ data class DeviceProfile(
             return (0 until list.size()).map { list[it].language }
         }
 
-        
         fun normalizeLanguages(primary: String, others: List<String>): List<String> {
             val lead = catalogLanguageCode(primary)
                 ?: primary.trim().lowercase(Locale.ROOT).substringBefore('-').substringBefore('_')
