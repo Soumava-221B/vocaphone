@@ -269,6 +269,8 @@ class LocalModelManager(
         return job
     }
 
+    fun activeDownload(): Job? = activeDownloadJob.get()
+
     fun markAdopted(id: String) {
         _state.update { if (it.pendingUse == id) it.copy(pendingUse = null) else it }
     }

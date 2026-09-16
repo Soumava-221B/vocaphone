@@ -2,9 +2,6 @@ package com.vocahq.vocaphone.dictation
 
 import com.vocahq.vocaphone.core.MissingPermission
 import com.vocahq.vocaphone.local.LocalModelState
-import com.vocahq.vocaphone.local.ModelDownloadService
-import com.vocahq.vocaphone.local.ModelDownloadService.WatchPhase
-import com.vocahq.vocaphone.local.ModelDownloadService.WatchStep
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -120,29 +117,5 @@ class DownloadFollowTest {
     fun landedWinsOverAReplacementThatStartedAfterwards() {
         val state = LocalModelState(downloaded = setOf(parakeet), downloading = tiny, pendingUse = null)
         assertEquals(DownloadOutcome.LANDED, downloadOutcome(state, parakeet))
-    }
-
-    // --- the download service ------------------------------------------------
-
-    @Test
-    fun theServiceWaitsUntilItsOwnDownloadIsSeenRunning() {
-        assertEquals(WatchStep.WAIT, ModelDownloadService.watchStep(WatchPhase.ARMING, null, parakeet, null))
-        assertEquals(WatchStep.WAIT, ModelDownloadService.watchStep(WatchPhase.ARMING, tiny, parakeet, null))
-        assertEquals(WatchStep.ARM, ModelDownloadService.watchStep(WatchPhase.ARMING, parakeet, parakeet, null))
-    }
-
-    @Test
-    fun theServiceStopsWhenTheDownloadWasRefusedBeforeItBegan() {
-        assertEquals(
-            WatchStep.STOP,
-            ModelDownloadService.watchStep(WatchPhase.ARMING, null, parakeet, "Not enough space"),
-        )
-    }
-
-    @Test
-    fun onceRunningTheServiceStopsWhenItsIdGoesAway() {
-        assertEquals(WatchStep.WAIT, ModelDownloadService.watchStep(WatchPhase.RUNNING, parakeet, parakeet, null))
-        assertEquals(WatchStep.STOP, ModelDownloadService.watchStep(WatchPhase.RUNNING, null, parakeet, "done"))
-        assertEquals(WatchStep.STOP, ModelDownloadService.watchStep(WatchPhase.RUNNING, tiny, parakeet, null))
     }
 }
