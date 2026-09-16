@@ -175,6 +175,7 @@ fun SetupScreen(
     var askingUsageReporting by remember { mutableStateOf(false) }
     val recentlyReady = rememberRecentlyReadySteps(status)
     val readyPresentation = readyPagePresentation(status, settings.localTranscriptionEnabled, localModels)
+    val attention = attentionCopy(status.remainingSteps)
 
     // The saved page is read only once status has loaded (the guard above),
     // because settings arrive with it: reading the stage a frame early would
@@ -208,11 +209,7 @@ fun SetupScreen(
         }
     }
     fun advance() {
-        stage = when (stage) {
-            // A gateway user has no model to choose.
-            OnboardingStage.SOURCE -> if (settings.localTranscriptionEnabled) OnboardingStage.MODEL else OnboardingStage.MICROPHONE
-            else -> stage.next()
-        }
+        stage = stage.advance(status, settings.localTranscriptionEnabled)
     }
     BackHandler(enabled = stage != OnboardingStage.WELCOME) { stage = stage.previous() }
 
@@ -261,7 +258,11 @@ fun SetupScreen(
                                 )
                             }
                             Text(
-                                if (status.isReadyToDictate) "Setup complete" else "Setup needs attention",
+                                when {
+                                    status.isReadyToDictate -> "Setup complete"
+                                    status.remainingSteps.size == 1 -> "1 step left"
+                                    else -> "${status.remainingSteps.size} steps left"
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -293,7 +294,7 @@ fun SetupScreen(
                     Text(
                         when {
                             stage != OnboardingStage.READY -> stage.title
-                            readyPresentation == ReadyPagePresentation.NEEDS_ATTENTION -> "Let’s get you ready"
+                            readyPresentation == ReadyPagePresentation.NEEDS_ATTENTION -> attention.title
                             readyPresentation == ReadyPagePresentation.WAITING_FOR_MODEL -> SetupCopy.WAITING_TITLE
                             else -> stage.title
                         },
@@ -303,8 +304,7 @@ fun SetupScreen(
                     Text(
                         when {
                             stage != OnboardingStage.READY -> stage.detail
-                            readyPresentation == ReadyPagePresentation.NEEDS_ATTENTION ->
-                                "A permission, keyboard, or speech source needs attention."
+                            readyPresentation == ReadyPagePresentation.NEEDS_ATTENTION -> attention.detail
                             readyPresentation == ReadyPagePresentation.WAITING_FOR_MODEL -> SetupCopy.WAITING_DETAIL
                             else -> stage.detail
                         },
@@ -450,7 +450,7 @@ fun SetupScreen(
                     } else if (readyPresentation == ReadyPagePresentation.NEEDS_ATTENTION) {
                         val reason = localModels.message
                             ?.takeIf { settings.localTranscriptionEnabled && !status.gatewayConfigured }
-                        Notice { Text(reason ?: "A setup requirement changed. Review it before you start dictating.") }
+                        if (reason != null) Notice { Text(reason) }
                     }
                 }
             }
@@ -482,6 +482,7 @@ fun SetupScreen(
                         OnboardingStage.READY -> readyPageButtonLabel(
                             readyPresentation,
                             localModels.takeIf { it.downloading != null }?.let(::downloadProgressLine),
+                            attention.button,
                         )
                         else -> "Continue"
                     },

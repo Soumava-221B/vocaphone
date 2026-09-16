@@ -2,6 +2,29 @@ package com.vocahq.vocaphone.ui
 
 import com.vocahq.vocaphone.local.LocalModelState
 
+internal data class AttentionCopy(val title: String, val detail: String, val button: String)
+
+internal fun attentionCopy(remaining: List<SetupStep>): AttentionCopy {
+    val only = remaining.singleOrNull()
+    if (only != null) {
+        val (action, button) = when (only) {
+            SetupStep.GATEWAY -> "Choose a speech model" to "Choose a model"
+            SetupStep.MICROPHONE -> "Allow the microphone" to "Allow microphone"
+            SetupStep.NOTIFICATIONS -> "Allow notifications" to "Allow notifications"
+            SetupStep.KEYBOARD -> "Turn on the VocaPhone keyboard" to "Turn on keyboard"
+        }
+        return AttentionCopy("One more step", "$action and you\u2019re done.", button)
+    }
+    val labels = remaining.map { it.label }
+    val listed = if (labels.size <= 1) labels.joinToString() else
+        labels.dropLast(1).joinToString(", ") + " and " + labels.last()
+    return AttentionCopy(
+        "Let\u2019s get you ready",
+        if (labels.isEmpty()) "A permission, keyboard, or speech source needs attention." else "$listed still need attention.",
+        SetupCopy.REVIEW,
+    )
+}
+
 /**
  * How the last setup page presents itself.
  *
@@ -38,10 +61,14 @@ internal fun readyPagePresentation(
  * state because [com.vocahq.vocaphone.local.downloadProgressLine] reads the
  * clock, and this must stay testable without one.
  */
-internal fun readyPageButtonLabel(presentation: ReadyPagePresentation, progressLine: String?): String =
+internal fun readyPageButtonLabel(
+    presentation: ReadyPagePresentation,
+    progressLine: String?,
+    attentionButton: String = SetupCopy.REVIEW,
+): String =
     when (presentation) {
         ReadyPagePresentation.READY -> SetupCopy.START
-        ReadyPagePresentation.NEEDS_ATTENTION -> SetupCopy.REVIEW
+        ReadyPagePresentation.NEEDS_ATTENTION -> attentionButton
         ReadyPagePresentation.WAITING_FOR_MODEL ->
             if (progressLine != null) "${SetupCopy.WAITING_DOWNLOADING} · $progressLine" else SetupCopy.WAITING_PREPARING
     }

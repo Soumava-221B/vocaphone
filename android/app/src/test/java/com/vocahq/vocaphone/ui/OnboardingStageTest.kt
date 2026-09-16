@@ -56,6 +56,45 @@ class OnboardingStageTest {
             .forEach { assertFalse(it.name, it.isSatisfied(SetupStatus())) }
     }
 
+    // --- Continue walks past requirements already met ---------------------
+
+    @Test
+    fun `after review the model page leads straight to the end`() {
+        // The reported case: skip the model, meet everything else, come back
+        // for the model — Continue must not replay three green pages.
+        assertEquals(OnboardingStage.READY, OnboardingStage.MODEL.advance(ready, true))
+    }
+
+    @Test
+    fun `continue stops at the next unmet requirement only`() {
+        assertEquals(OnboardingStage.MICROPHONE, OnboardingStage.MODEL.advance(ready.copy(microphone = false), true))
+        assertEquals(OnboardingStage.KEYBOARD, OnboardingStage.MODEL.advance(ready.copy(keyboard = false), true))
+        assertEquals(OnboardingStage.NOTIFICATIONS, OnboardingStage.MICROPHONE.advance(ready.copy(notifications = false), true))
+    }
+
+    @Test
+    fun `the source page always shows the model page to a local user`() {
+        assertEquals(OnboardingStage.MODEL, OnboardingStage.SOURCE.advance(SetupStatus(), true))
+        assertEquals(OnboardingStage.MODEL, OnboardingStage.SOURCE.advance(ready, true))
+    }
+
+    @Test
+    fun `a gateway user skips the model page and any met requirement`() {
+        assertEquals(OnboardingStage.MICROPHONE, OnboardingStage.SOURCE.advance(SetupStatus(gatewayConfigured = true), false))
+        assertEquals(OnboardingStage.READY, OnboardingStage.SOURCE.advance(ready, false))
+    }
+
+    @Test
+    fun `continue never lands on the confirmation`() {
+        assertEquals(OnboardingStage.READY, OnboardingStage.KEYBOARD.advance(ready, true))
+    }
+
+    @Test
+    fun `the welcome always leads to the source choice`() {
+        assertEquals(OnboardingStage.SOURCE, OnboardingStage.WELCOME.advance(ready, true))
+        assertEquals(OnboardingStage.SOURCE, OnboardingStage.WELCOME.advance(SetupStatus(), false))
+    }
+
     // --- what the split adds ------------------------------------------------
 
     @Test

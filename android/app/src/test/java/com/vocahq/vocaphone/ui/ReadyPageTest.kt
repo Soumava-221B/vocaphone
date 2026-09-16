@@ -57,6 +57,31 @@ class ReadyPageTest {
     }
 
     @Test
+    fun `one missing step is named with its own verb`() {
+        assertEquals(
+            AttentionCopy("One more step", "Choose a speech model and you\u2019re done.", "Choose a model"),
+            attentionCopy(listOf(SetupStep.GATEWAY)),
+        )
+        assertEquals("Allow microphone", attentionCopy(listOf(SetupStep.MICROPHONE)).button)
+        assertEquals("Allow notifications", attentionCopy(listOf(SetupStep.NOTIFICATIONS)).button)
+        assertEquals("Turn on keyboard", attentionCopy(listOf(SetupStep.KEYBOARD)).button)
+    }
+
+    @Test
+    fun `several missing steps are listed and reviewed`() {
+        val two = attentionCopy(listOf(SetupStep.MICROPHONE, SetupStep.KEYBOARD))
+        assertEquals("Microphone and VocaPhone keyboard still need attention.", two.detail)
+        assertEquals(SetupCopy.REVIEW, two.button)
+        val three = attentionCopy(listOf(SetupStep.MICROPHONE, SetupStep.NOTIFICATIONS, SetupStep.GATEWAY))
+        assertEquals("Microphone, Notifications and Speech source still need attention.", three.detail)
+    }
+
+    @Test
+    fun `the attention button label is the one the copy chose`() {
+        assertEquals("Choose a model", readyPageButtonLabel(ReadyPagePresentation.NEEDS_ATTENTION, null, "Choose a model"))
+    }
+
+    @Test
     fun `button label follows the presentation`() {
         assertEquals(SetupCopy.START, readyPageButtonLabel(ReadyPagePresentation.READY, null))
         assertEquals(SetupCopy.REVIEW, readyPageButtonLabel(ReadyPagePresentation.NEEDS_ATTENTION, null))

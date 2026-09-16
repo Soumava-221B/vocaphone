@@ -86,6 +86,11 @@ internal enum class OnboardingStage(
 
     fun next(): OnboardingStage = entries[(ordinal + 1).coerceAtMost(entries.lastIndex)]
 
+    fun advance(status: SetupStatus, localTranscriptionEnabled: Boolean): OnboardingStage = when {
+        this == SOURCE -> if (localTranscriptionEnabled) MODEL else resume(MICROPHONE, status)
+        else -> resume(next(), status)
+    }
+
     /** Thin top bar. Welcome is a sliver, each page fills it, the confirmation shares KEYBOARD's stop. */
     val progress: Float
         get() = when (this) {
