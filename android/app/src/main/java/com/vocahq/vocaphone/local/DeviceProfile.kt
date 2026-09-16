@@ -1,9 +1,7 @@
 package com.vocahq.vocaphone.local
 
-import android.content.Context
 import android.os.Build
 import android.os.LocaleList
-import android.view.inputmethod.InputMethodManager
 import java.io.File
 import java.util.Locale
 import kotlin.math.abs
@@ -114,23 +112,12 @@ data class DeviceProfile(
             return (0 until list.size()).map { list[it].language }
         }
 
-        fun keyboardLanguages(context: Context): List<String> = runCatching {
-            val imm = context.getSystemService(InputMethodManager::class.java) ?: return@runCatching emptyList()
-            imm.enabledInputMethodList.flatMap { method ->
-                imm.getEnabledInputMethodSubtypeList(method, true).mapNotNull { subtype ->
-                    val tag = subtype.languageTag
-                    val raw = if (tag.isNotBlank()) tag else subtype.locale
-                    raw.takeIf { it.isNotBlank() }?.let { Locale.forLanguageTag(it.replace('_', '-')).language }
-                }
-            }
-        }.getOrDefault(emptyList())
-
+        
         fun normalizeLanguages(primary: String, others: List<String>): List<String> {
-            val ordered = listOf(primary) + others
-            return ordered
-                .map { it.trim().lowercase(Locale.ROOT).substringBefore('-').substringBefore('_') }
-                .filter { it.isNotBlank() }
-                .distinct()
+            val lead = catalogLanguageCode(primary)
+                ?: primary.trim().lowercase(Locale.ROOT).substringBefore('-').substringBefore('_')
+            val rest = others.mapNotNull(::catalogLanguageCode)
+            return (listOf(lead) + rest).filter { it.isNotBlank() }.distinct()
         }
     }
 }

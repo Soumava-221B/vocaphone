@@ -193,6 +193,24 @@ data class LocalModelDescriptor(
         }
 }
 
+
+fun catalogLanguageCode(raw: String?): String? {
+    if (raw.isNullOrBlank()) return null
+    val lowered = raw.trim().lowercase(Locale.ROOT)
+    if ("emoji" in lowered || "dictation" in lowered || "vocaphone" in lowered) return null
+    val localePart = lowered.substringBefore('@')
+    if ('.' in localePart) return null
+    val bcp47 = localePart.replace('_', '-')
+    var code = Locale.forLanguageTag(bcp47).language.lowercase(Locale.ROOT).ifBlank {
+        localePart.split('-').firstOrNull().orEmpty()
+    }
+    if (code.startsWith("zh")) code = "zh"
+    if (code == "fil") code = TranscriptionLanguage.FILIPINO.wireValue
+    if (code == TranscriptionLanguage.AUTOMATIC.wireValue || code == "und" || code == "mul") return null
+    if (code !in PICKER_LANGUAGES) return null
+    return code
+}
+
 /** Every code the picker can show, which is the ceiling on any coverage claim. */
 private val PICKER_LANGUAGES: Set<String> by lazy {
     TranscriptionLanguage.entries

@@ -125,4 +125,43 @@ class DeviceProfileLanguagesTest {
         assertTrue(result.model != null)
         assertTrue("the automatic pick must cover the keyboard language too", result.model!!.coversLanguage("ru"))
     }
+
+    @Test
+    fun subtypesThatAreNotLanguagesAreDropped() {
+        assertEquals(
+            listOf("en", "ru"),
+            DeviceProfile.normalizeLanguages(
+                "en",
+                listOf("en_US", "emoji", "und-dictation", "vocaphone", "ru_RU", "zz", "en_US.UTF-8"),
+            ),
+        )
+    }
+
+    @Test
+    fun scriptAndRegionVariantsCollapseToTheCatalogCode() {
+        assertEquals("zh", catalogLanguageCode("zh-Hant-TW"))
+        assertEquals("zh", catalogLanguageCode("zh_CN"))
+        assertEquals("en", catalogLanguageCode("en-GB"))
+        assertEquals("en", catalogLanguageCode("en_US@calendar=gregorian"))
+    }
+
+    @Test
+    fun filipinoMapsToTheCatalogsCode() {
+        assertEquals("tl", catalogLanguageCode("fil-PH"))
+    }
+
+    @Test
+    fun codesNoModelCanClaimAreDroppedRatherThanCarried() {
+        assertEquals(null, catalogLanguageCode("und"))
+        assertEquals(null, catalogLanguageCode("mul"))
+        assertEquals(null, catalogLanguageCode("auto"))
+        assertEquals(null, catalogLanguageCode("xx-nowhere"))
+        assertEquals(null, catalogLanguageCode(""))
+        assertEquals(null, catalogLanguageCode(null))
+    }
+
+    @Test
+    fun anUnknownPrimaryIsKeptButAnUnknownSecondaryIsNot() {
+        assertEquals(listOf("xx", "ru"), DeviceProfile.normalizeLanguages("xx", listOf("ru", "yy")))
+    }
 }

@@ -97,7 +97,7 @@ fun LocalModelPicker(
         // a Russian speaker, and the UI language alone would never say so.
         DeviceProfile.current(
             totalRamGB = state.totalRamGB,
-            languages = DeviceProfile.phoneLanguages() + DeviceProfile.keyboardLanguages(context),
+            languages = DeviceProfile.phoneLanguages() + KeyboardInputLanguages.enabled(context),
         )
     }
     var guidancePriority by rememberSaveable { mutableStateOf(ModelGuidancePriority.BALANCED) }
