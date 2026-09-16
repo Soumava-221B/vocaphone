@@ -39,6 +39,19 @@ class ReadyPageTest {
     }
 
     @Test
+    fun `preparation failure reads as attention for a first-time user`() {
+        val status = ready.copy(gatewayConfigured = false)
+        val failed = LocalModelState(downloaded = setOf(parakeet), message = "Could not load Parakeet.")
+        assertEquals(ReadyPagePresentation.NEEDS_ATTENTION, readyPagePresentation(status, true, failed))
+    }
+
+    @Test
+    fun `preparation failure with an older working model is honestly ready`() {
+        val failed = LocalModelState(downloaded = setOf(parakeet, "tiny"), message = "Could not load Parakeet.")
+        assertEquals(ReadyPagePresentation.READY, readyPagePresentation(ready, true, failed))
+    }
+
+    @Test
     fun `gateway source never waits on a model`() {
         assertEquals(ReadyPagePresentation.READY, readyPagePresentation(ready, false, inFlight))
     }

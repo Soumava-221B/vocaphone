@@ -21,10 +21,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Keeps the process alive while a model downloads, and says how far it is.
@@ -59,37 +61,62 @@ class ModelDownloadService : Service() {
             ACTION_START -> {
                 createChannel()
                 val name = intent.getStringExtra(EXTRA_NAME).orEmpty()
+                val modelId = intent.getStringExtra(EXTRA_MODEL_ID)
+                if (modelId.isNullOrEmpty()) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 if (!enterForeground(notification(name, models.state.value))) {
                     // Refused. The download still runs as it did before this
                     // service existed; only the shade is missing.
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                watch(name)
+                watch(modelId, name)
             }
             else -> stopSelf()
         }
         return START_NOT_STICKY
     }
 
-    private fun watch(name: String) {
+    private fun watch(modelId: String, name: String) {
         watcher?.cancel()
         val models = VocaPhoneApplication.container(this).localModels
+        val states = models.state
+            .map { DownloadNotificationState(it.downloading, it.progress, downloadProgressLine(it), it.message) }
+            .distinctUntilChanged()
         watcher = scope.launch {
-            models.state
-                .map { DownloadNotificationState(it.downloading, it.progress, downloadProgressLine(it), it.message) }
-                .distinctUntilChanged()
-                .collect { snapshot ->
-                    if (shouldStop(snapshot.downloading)) {
-                        notificationManager().notify(NOTIFICATION_ID, finalNotification(snapshot.message))
-                        delay(FINAL_LINGER_MILLIS)
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
-                        return@collect
-                    }
-                    notificationManager().notify(NOTIFICATION_ID, notification(name, models.state.value))
+            val first = withTimeoutOrNull(ARM_TIMEOUT_MILLIS) {
+                states.first { watchStep(WatchPhase.ARMING, it.downloading, modelId, it.message) != WatchStep.WAIT }
+            }
+            when {
+                first == null -> {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return@launch
                 }
+                watchStep(WatchPhase.ARMING, first.downloading, modelId, first.message) == WatchStep.STOP -> {
+                    finish(first.message)
+                    return@launch
+                }
+            }
+            var ended: DownloadNotificationState? = null
+            states
+                .takeWhile { snapshot ->
+                    val running = watchStep(WatchPhase.RUNNING, snapshot.downloading, modelId, snapshot.message) == WatchStep.WAIT
+                    if (!running) ended = snapshot
+                    running
+                }
+                .collect { notificationManager().notify(NOTIFICATION_ID, notification(name, models.state.value)) }
+            finish(ended?.message)
         }
+    }
+
+    private suspend fun finish(message: String?) {
+        notificationManager().notify(NOTIFICATION_ID, finalNotification(message))
+        delay(FINAL_LINGER_MILLIS)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -159,6 +186,9 @@ class ModelDownloadService : Service() {
 
     private fun notificationManager() = getSystemService(NotificationManager::class.java)
 
+    internal enum class WatchPhase { ARMING, RUNNING }
+    internal enum class WatchStep { WAIT, ARM, STOP }
+
     private data class DownloadNotificationState(
         val downloading: String?,
         val progress: Int,
@@ -170,12 +200,21 @@ class ModelDownloadService : Service() {
         const val ACTION_START = "com.vocahq.vocaphone.MODEL_DOWNLOAD_START"
         const val ACTION_CANCEL = "com.vocahq.vocaphone.MODEL_DOWNLOAD_CANCEL"
         const val EXTRA_NAME = "name"
+        const val EXTRA_MODEL_ID = "modelId"
         private const val CHANNEL_ID = "vocaphone.model_download"
         private const val NOTIFICATION_ID = 4102
         private const val FINAL_LINGER_MILLIS = 1_500L
+        private const val ARM_TIMEOUT_MILLIS = 15_000L
 
-        /** The service has nothing to do once nothing is downloading. Pure, for the test. */
-        fun shouldStop(downloading: String?): Boolean = downloading == null
+        internal fun watchStep(phase: WatchPhase, downloading: String?, target: String, message: String?): WatchStep =
+            when (phase) {
+                WatchPhase.ARMING -> when {
+                    downloading == target -> WatchStep.ARM
+                    downloading == null && message != null -> WatchStep.STOP
+                    else -> WatchStep.WAIT
+                }
+                WatchPhase.RUNNING -> if (downloading == target) WatchStep.WAIT else WatchStep.STOP
+            }
 
         /**
          * Starts the service for a download the manager has already begun.
@@ -183,9 +222,10 @@ class ModelDownloadService : Service() {
          * allows; a refusal is caught inside and the download simply runs
          * without a notification, as it did before.
          */
-        fun start(context: Context, modelName: String) {
+        fun start(context: Context, modelId: String, modelName: String) {
             val intent = Intent(context, ModelDownloadService::class.java)
                 .setAction(ACTION_START)
+                .putExtra(EXTRA_MODEL_ID, modelId)
                 .putExtra(EXTRA_NAME, modelName)
             try {
                 ContextCompat.startForegroundService(context, intent)

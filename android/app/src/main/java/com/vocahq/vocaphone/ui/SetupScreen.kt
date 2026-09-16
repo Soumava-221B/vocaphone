@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -236,19 +237,47 @@ fun SetupScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (stage != OnboardingStage.WELCOME) {
-                        TextButton(onClick = { stage = stage.previous() }) { Text("Back") }
+                        IconButton(onClick = { stage = stage.previous() }) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_arrow_back),
+                                contentDescription = "Back",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     } else {
                         Spacer(Modifier)
                     }
-                    Text(
-                        if (stage == OnboardingStage.READY) {
-                            if (status.isReadyToDictate) "Setup complete" else "Setup needs attention"
-                        } else "",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    if (stage == OnboardingStage.READY) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (status.isReadyToDictate) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_check),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                            Text(
+                                if (status.isReadyToDictate) "Setup complete" else "Setup needs attention",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else {
+                        Spacer(Modifier)
+                    }
                     if (stage.allowsSkip) {
-                        TextButton(onClick = { advance() }) { Text("Skip") }
+                        TextButton(onClick = { advance() }) {
+                            Text("Skip")
+                            Icon(
+                                painter = painterResource(R.drawable.ic_chevron),
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     } else {
                         Spacer(Modifier)
                     }
@@ -419,7 +448,9 @@ fun SetupScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else if (readyPresentation == ReadyPagePresentation.NEEDS_ATTENTION) {
-                        Notice { Text("A setup requirement changed. Review it before you start dictating.") }
+                        val reason = localModels.message
+                            ?.takeIf { settings.localTranscriptionEnabled && !status.gatewayConfigured }
+                        Notice { Text(reason ?: "A setup requirement changed. Review it before you start dictating.") }
                     }
                 }
             }

@@ -178,7 +178,7 @@ class VocaPhoneViewModel @JvmOverloads constructor(
         // observer above: the state should arrive, not wait to be sampled.
         viewModelScope.launch {
             container.localModels.state
-                .map { it.downloading to it.downloaded }
+                .map { Triple(it.downloading, it.downloaded, it.pendingUse) }
                 .distinctUntilChanged()
                 .drop(1)
                 .collect { refreshSetup() }
@@ -218,11 +218,11 @@ class VocaPhoneViewModel @JvmOverloads constructor(
                 // rather than the app holding the person on the setup screen.
                 // Any download in progress counts, not only the chosen id: a
                 // download started from setup is always download-and-use, and
-                // the id is only written once the file has landed.
                 gatewayConfigured = configuration.isConfigured || (
                     configuration.localTranscriptionEnabled && (
                         container.localModels.isDownloaded(configuration.localModelId) ||
-                            container.localModels.isDownloadingAny()
+                            container.localModels.isDownloadingAny() ||
+                            container.localModels.hasPendingUse()
                         )
                     ),
             )
@@ -569,7 +569,7 @@ class VocaPhoneViewModel @JvmOverloads constructor(
         val job = container.localModels.startDownload(model, useWhenReady = useWhenReady)
         // Keeps the process alive while the person is in system Settings, and
         // puts progress in the shade. The download itself stays in the manager.
-        ModelDownloadService.start(getApplication(), model.displayName)
+        ModelDownloadService.start(getApplication(), model.id, model.displayName)
         localModelDownloadJob = job
         job.invokeOnCompletion { cause ->
             if (localModelDownloadJob === job) localModelDownloadJob = null
@@ -614,6 +614,7 @@ class VocaPhoneViewModel @JvmOverloads constructor(
                             } catch (_: Exception) {
                                 container.localModels.reportPreparationFailure(model)
                                 container.localModels.clearPendingUse(model.id)
+                                refreshSetup()
                                 return@launch
                             }
                             container.settings.setLocalModel(model.id)

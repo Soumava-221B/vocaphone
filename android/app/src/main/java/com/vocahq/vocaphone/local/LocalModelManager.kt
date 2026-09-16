@@ -229,6 +229,8 @@ class LocalModelManager(
 
     fun isDownloadingAny(): Boolean = _state.value.downloading != null
 
+    fun hasPendingUse(): Boolean = _state.value.pendingUse != null
+
     fun directoryFor(model: LocalModelDescriptor): File = File(modelRoot, model.id)
 
     /**
