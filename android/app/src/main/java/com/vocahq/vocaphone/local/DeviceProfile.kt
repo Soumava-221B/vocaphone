@@ -1,6 +1,9 @@
 package com.vocahq.vocaphone.local
 
+import android.content.Context
 import android.os.Build
+import android.os.LocaleList
+import android.view.inputmethod.InputMethodManager
 import java.io.File
 import java.util.Locale
 import kotlin.math.abs
@@ -29,7 +32,16 @@ data class DeviceProfile(
     val sherpaAvailable: Boolean = false,
     /** BCP-47 language subtag from the phone, used to pick a first-run model. */
     val language: String = "en",
+    val languages: List<String> = listOf(language),
 ) {
+    
+    val englishOnly: Boolean get() = language == "en" && languages.all { it == "en" }
+
+    fun withExplicitLanguage(chosen: String): DeviceProfile {
+        val lang = chosen.trim().lowercase(Locale.ROOT)
+        return copy(language = lang, languages = listOf(lang))
+    }
+
     val arm64: Boolean get() = abi == "arm64-v8a"
 
     val tier: DeviceTier
@@ -82,15 +94,44 @@ data class DeviceProfile(
         fun current(
             totalRamGB: Long,
             sherpaAvailable: Boolean = LocalModelCatalog.sherpaAvailable,
-        ): DeviceProfile = DeviceProfile(
-            totalRamGB = totalRamGB,
-            cpuCores = Runtime.getRuntime().availableProcessors(),
-            performanceClass = Build.VERSION.MEDIA_PERFORMANCE_CLASS,
-            abi = Build.SUPPORTED_ABIS?.firstOrNull().orEmpty(),
-            maxCpuKHz = readMaxCpuKHz(),
-            sherpaAvailable = sherpaAvailable,
-            language = Locale.getDefault().language,
-        )
+            languages: List<String> = phoneLanguages(),
+        ): DeviceProfile {
+            val primary = Locale.getDefault().language
+            return DeviceProfile(
+                totalRamGB = totalRamGB,
+                cpuCores = Runtime.getRuntime().availableProcessors(),
+                performanceClass = Build.VERSION.MEDIA_PERFORMANCE_CLASS,
+                abi = Build.SUPPORTED_ABIS?.firstOrNull().orEmpty(),
+                maxCpuKHz = readMaxCpuKHz(),
+                sherpaAvailable = sherpaAvailable,
+                language = primary,
+                languages = normalizeLanguages(primary, languages),
+            )
+        }
+
+        fun phoneLanguages(): List<String> {
+            val list = LocaleList.getDefault()
+            return (0 until list.size()).map { list[it].language }
+        }
+
+        fun keyboardLanguages(context: Context): List<String> = runCatching {
+            val imm = context.getSystemService(InputMethodManager::class.java) ?: return@runCatching emptyList()
+            imm.enabledInputMethodList.flatMap { method ->
+                imm.getEnabledInputMethodSubtypeList(method, true).mapNotNull { subtype ->
+                    val tag = subtype.languageTag
+                    val raw = if (tag.isNotBlank()) tag else subtype.locale
+                    raw.takeIf { it.isNotBlank() }?.let { Locale.forLanguageTag(it.replace('_', '-')).language }
+                }
+            }
+        }.getOrDefault(emptyList())
+
+        fun normalizeLanguages(primary: String, others: List<String>): List<String> {
+            val ordered = listOf(primary) + others
+            return ordered
+                .map { it.trim().lowercase(Locale.ROOT).substringBefore('-').substringBefore('_') }
+                .filter { it.isNotBlank() }
+                .distinct()
+        }
     }
 }
 

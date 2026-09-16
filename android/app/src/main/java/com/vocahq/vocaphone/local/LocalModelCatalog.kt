@@ -350,7 +350,8 @@ object LocalModelCatalog {
     fun recommendations(profile: DeviceProfile): List<ModelPick> {
         val english = bestEnglish(profile)
         val multilingual = bestMultilingual(profile)
-        val regional = starterForLanguage(profile.language)?.takeIf { profile.fits(it) }
+        val regionalLanguage = profile.languages.firstOrNull { it != "en" } ?: profile.language
+        val regional = starterForLanguage(regionalLanguage)?.takeIf { profile.fits(it) }
         val compact = smallestCovering(profile)
 
         // First role wins when two roles land on the same model, which is why
@@ -360,13 +361,22 @@ object LocalModelCatalog {
             if (model == null) return
             picks.putIfAbsent(model.id, ModelPick(role, model))
         }
-        if (profile.language.lowercase(Locale.ROOT) == "en") {
-            add(ModelPickRole.ENGLISH, english)
-            add(ModelPickRole.MULTILINGUAL, multilingual)
-        } else {
-            add(ModelPickRole.REGIONAL, regional)
-            add(ModelPickRole.MULTILINGUAL, multilingual)
-            add(ModelPickRole.ENGLISH, english)
+        val coversEverything = multilingual?.coversAll(profile.languages) == true
+        when {
+            profile.englishOnly -> {
+                add(ModelPickRole.ENGLISH, english)
+                add(ModelPickRole.MULTILINGUAL, multilingual)
+            }
+            profile.languages.size > 1 && coversEverything -> {
+                add(ModelPickRole.MULTILINGUAL, multilingual)
+                add(ModelPickRole.REGIONAL, regional)
+                add(ModelPickRole.ENGLISH, english)
+            }
+            else -> {
+                add(ModelPickRole.REGIONAL, regional)
+                add(ModelPickRole.MULTILINGUAL, multilingual)
+                add(ModelPickRole.ENGLISH, english)
+            }
         }
         add(ModelPickRole.COMPACT, compact)
 
@@ -387,17 +397,19 @@ object LocalModelCatalog {
                 .maxByOrNull { scoreModel(it, profile) }
             ?: recommendedWhisper(profile)
 
-    /** The widest-coverage model that still covers this phone's own language. */
     internal fun bestMultilingual(profile: DeviceProfile): LocalModelDescriptor? =
         MULTILINGUAL_PREFERENCE.firstNotNullOfOrNull { id ->
+            find(id)?.takeIf { profile.fits(it) && it.coversAll(profile.languages) }
+        } ?: MULTILINGUAL_PREFERENCE.firstNotNullOfOrNull { id ->
             find(id)?.takeIf { profile.fits(it) && it.coversLanguage(profile.language) }
         } ?: whisper.filter { profile.fits(it) && !it.englishOnly }
             .maxByOrNull { scoreModel(it, profile) }
 
-    /** The lightest download that still transcribes this phone's language. */
     private fun smallestCovering(profile: DeviceProfile): LocalModelDescriptor? =
-        all.filter { profile.fits(it) && it.coversLanguage(profile.language) }
+        all.filter { profile.fits(it) && it.coversAll(profile.languages) }
             .minByOrNull { it.sizeBytes }
+            ?: all.filter { profile.fits(it) && it.coversLanguage(profile.language) }
+                .minByOrNull { it.sizeBytes }
 
     private fun firstFitting(
         profile: DeviceProfile,
@@ -577,6 +589,9 @@ private val LARGE_V3_ONLY_LANGUAGES = setOf("yue")
  * which. Empty means no restriction, which is the honest answer for whisper's
  * multilingual builds apart from [LARGE_V3_ONLY_LANGUAGES].
  */
+fun LocalModelDescriptor.coversAll(languages: List<String>): Boolean =
+    languages.all { coversLanguage(it) }
+
 fun LocalModelDescriptor.coversLanguage(language: String): Boolean {
     val lang = language.lowercase(Locale.ROOT)
     if (lang.isBlank()) return true

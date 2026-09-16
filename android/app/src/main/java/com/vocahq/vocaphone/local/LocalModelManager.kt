@@ -220,6 +220,10 @@ class LocalModelManager(
 
     fun isDownloaded(id: String): Boolean = id in _state.value.downloaded
 
+    fun isDownloading(id: String): Boolean = _state.value.downloading == id
+
+    fun isDownloadingAny(): Boolean = _state.value.downloading != null
+
     fun directoryFor(model: LocalModelDescriptor): File = File(modelRoot, model.id)
 
     /**

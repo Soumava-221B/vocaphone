@@ -39,6 +39,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.CancellationException
@@ -160,6 +163,16 @@ class VocaPhoneViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
         }
+        // A download starting or landing changes whether the speech source is
+        // satisfied, and neither is a resume. Same reasoning as the IME
+        // observer above: the state should arrive, not wait to be sampled.
+        viewModelScope.launch {
+            container.localModels.state
+                .map { it.downloading to it.downloaded }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { refreshSetup() }
+        }
     }
 
     override fun onCleared() {
@@ -182,9 +195,17 @@ class VocaPhoneViewModel(application: Application) : AndroidViewModel(applicatio
             val configuration = container.settings.current()
             _setup.value = SetupStatus.read(
                 context = getApplication(),
+                // A model on its way counts: setup finishes while it downloads,
+                // as on iOS, and the keyboard says "downloading" until it lands
+                // rather than the app holding the person on the setup screen.
+                // Any download in progress counts, not only the chosen id: a
+                // download started from setup is always download-and-use, and
+                // the id is only written once the file has landed.
                 gatewayConfigured = configuration.isConfigured || (
-                    configuration.localTranscriptionEnabled &&
-                        container.localModels.isDownloaded(configuration.localModelId)
+                    configuration.localTranscriptionEnabled && (
+                        container.localModels.isDownloaded(configuration.localModelId) ||
+                            container.localModels.isDownloadingAny()
+                        )
                     ),
             )
             reportSetupProgress(_setup.value)
@@ -449,6 +470,9 @@ class VocaPhoneViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun clearClipboardHistory() =
         viewModelScope.launch { container.settings.clearClipboardHistory() }
+
+    fun setOnboardingStage(stage: String) =
+        viewModelScope.launch { container.settings.setOnboardingStage(stage) }
 
     fun setOnboardingComplete(complete: Boolean) =
         viewModelScope.launch {

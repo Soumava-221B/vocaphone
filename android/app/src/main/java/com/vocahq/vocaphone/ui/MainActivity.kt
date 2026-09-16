@@ -342,6 +342,7 @@ fun VocaPhoneApp(
                 telemetryPendingCount = viewModel::telemetryPendingCount,
                 telemetryDeliveryStatus = viewModel::telemetryDeliveryStatus,
                 onFinish = { viewModel.setOnboardingComplete(true) },
+                onStageChange = viewModel::setOnboardingStage,
                 onRefreshSetup = viewModel::refreshSetup,
                 modifier = content,
             )
@@ -350,6 +351,8 @@ fun VocaPhoneApp(
                 state = dictation,
                 settings = settings,
                 setup = setup,
+                localModels = localModels,
+                onCancelLocalModelDownload = viewModel::cancelLocalModelDownload,
                 onStart = viewModel::startInAppDictation,
                 onFinish = viewModel::finishDictation,
                 onCancel = viewModel::cancelDictation,

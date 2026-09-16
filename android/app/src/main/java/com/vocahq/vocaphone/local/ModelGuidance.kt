@@ -44,7 +44,14 @@ data class ModelGuidanceResult(
     val isAvailable: Boolean get() = model != null
 
     val downloadDetail: String?
-        get() = model?.let { "Works with $languageName · ${it.sizeLabel} download" }
+        get() = model?.let {
+            val coverage = when {
+                it.englishOnly -> "English only"
+                it.languageCodes.size > 1 -> "${it.languageCodes.size} languages"
+                else -> "Works with $languageName"
+            }
+            "$coverage · ${it.sizeLabel} download"
+        }
 }
 
 /**
@@ -59,21 +66,18 @@ object ModelGuidance {
         profile: DeviceProfile,
         intent: ModelGuidanceIntent,
     ): ModelGuidanceResult {
-        val language = intent.language.lowercase(Locale.ROOT).let {
-            if (it.isBlank() || it == TranscriptionLanguage.AUTOMATIC.wireValue) {
-                profile.language.lowercase(Locale.ROOT)
-            } else {
-                it
-            }
-        }
+        val automatic = intent.language.isBlank() ||
+            intent.language.lowercase(Locale.ROOT) == TranscriptionLanguage.AUTOMATIC.wireValue
+        val language = if (automatic) profile.language.lowercase(Locale.ROOT) else intent.language.lowercase(Locale.ROOT)
+        val rankingProfile = if (automatic) profile else profile.withExplicitLanguage(language)
+        fun usable(model: LocalModelDescriptor) = LocalModelCatalog.isUsableOnDevice(
+            model,
+            profile.totalRamGB,
+            profile.sherpaAvailable,
+        ) && profile.fits(model)
         val candidates = LocalModelCatalog.all
-            .filter {
-                LocalModelCatalog.isUsableOnDevice(
-                    it,
-                    profile.totalRamGB,
-                    profile.sherpaAvailable,
-                ) && profile.fits(it) && it.coversLanguage(language)
-            }
+            .filter { usable(it) && it.coversAll(rankingProfile.languages) }
+            .ifEmpty { LocalModelCatalog.all.filter { usable(it) && it.coversLanguage(language) } }
 
         if (candidates.isEmpty()) {
             return ModelGuidanceResult(
@@ -85,7 +89,6 @@ object ModelGuidance {
         }
 
         val normalized = intent.copy(language = language)
-        val rankingProfile = profile.copy(language = language)
         val balanced = LocalModelCatalog.recommended(rankingProfile).takeIf { it in candidates }
             ?: candidates.sortedWith(
                 compareByDescending<LocalModelDescriptor> { scoreModel(it, rankingProfile) }

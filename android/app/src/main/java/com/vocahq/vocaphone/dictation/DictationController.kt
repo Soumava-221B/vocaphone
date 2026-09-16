@@ -182,6 +182,26 @@ class DictationController(
                 )
                 return@launch
             }
+            if (configuration.localTranscriptionEnabled) {
+                val models = localModels.state.value
+                val id = configuration.localModelId
+                val repair = when {
+                    id.isNotEmpty() && id in models.downloaded -> null
+                    // The id is written when the file lands, so mid-download it
+                    // may still be empty; the download itself is the signal.
+                    models.downloading != null -> MissingPermission.MODEL_DOWNLOADING
+                    else -> MissingPermission.MODEL_MISSING
+                }
+                if (repair != null) {
+                    diagnostics.recordError("setup", source.name)
+                    _state.value = DictationState(
+                        phase = DictationPhase.PERMISSION_REPAIR,
+                        missingPermissions = setOf(repair),
+                        modelDownloadProgress = models.progress.takeIf { repair == MissingPermission.MODEL_DOWNLOADING },
+                    )
+                    return@launch
+                }
+            }
             runDictation(source, configuration, token, UUID.randomUUID(), generation)
         }
     }
