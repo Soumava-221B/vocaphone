@@ -530,20 +530,8 @@ internal fun ModelDownloadCard(state: LocalModelState, onCancelDownload: () -> U
  * is actually moving, and the estimate is dropped entirely until it has settled
  * rather than shown while it would still swing wildly.
  */
-private fun downloadProgressLine(state: LocalModelState): String {
-    // Read at each recomposition, which progress updates already drive often
-    // enough to keep the estimate current without a timer of its own.
-    val elapsed = if (state.startedAtMillis > 0) {
-        SystemClock.elapsedRealtime() - state.startedAtMillis
-    } else {
-        0L
-    }
-    return listOfNotNull(
-        "${state.progress}%",
-        downloadSizeProgress(state.downloadedBytes, state.totalBytes),
-        downloadTimeRemaining(state.downloadedBytes, state.totalBytes, elapsed),
-    ).joinToString(" · ")
-}
+private fun downloadProgressLine(state: LocalModelState): String =
+    com.vocahq.vocaphone.local.downloadProgressLine(state)
 
 /**
  * The one sentence a warning is worth. Written so it says what to do, not only

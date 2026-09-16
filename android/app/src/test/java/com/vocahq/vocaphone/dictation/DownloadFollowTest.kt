@@ -40,11 +40,17 @@ class DownloadFollowTest {
         assertEquals(MissingPermission.MODEL_DOWNLOADING, modelRepair(parakeet, state))
     }
 
-    /** The window between the file arriving and the id being persisted. */
     @Test
-    fun aPendingModelOnDiskButNotYetChosenNeedsNoRepair() {
+    fun aPendingModelOnDiskButNotYetChosenIsStillAWait() {
         val state = LocalModelState(downloaded = setOf(parakeet), pendingUse = parakeet)
-        assertNull(modelRepair("", state))
+        assertEquals(MissingPermission.MODEL_PREPARING, modelRepair("", state))
+    }
+
+    /** Once adopted — id persisted, pending cleared — the first arm passes it. */
+    @Test
+    fun anAdoptedModelNeedsNoRepair() {
+        val state = LocalModelState(downloaded = setOf(parakeet), pendingUse = null)
+        assertNull(modelRepair(parakeet, state))
     }
 
     /**
@@ -72,8 +78,22 @@ class DownloadFollowTest {
     }
 
     @Test
-    fun theTargetOnDiskLanded() {
+    fun theTargetOnDiskAndAdoptedLanded() {
         assertEquals(DownloadOutcome.LANDED, downloadOutcome(LocalModelState(downloaded = setOf(parakeet)), parakeet))
+    }
+
+    /** On disk but still pending is not landed yet — adoption is loading it. */
+    @Test
+    fun theTargetOnDiskButStillPendingIsPreparing() {
+        val state = LocalModelState(downloaded = setOf(parakeet), pendingUse = parakeet, preparing = "Parakeet")
+        assertEquals(DownloadOutcome.PREPARING, downloadOutcome(state, parakeet))
+    }
+
+    /** Prepare failure clears the pending flag; the wait ends and the next tap re-evaluates. */
+    @Test
+    fun aClearedPendingFlagEndsTheWaitEvenIfNothingWasAdopted() {
+        val state = LocalModelState(downloaded = setOf(parakeet), pendingUse = null)
+        assertEquals(DownloadOutcome.LANDED, downloadOutcome(state, parakeet))
     }
 
     /** The other half of Greptile's case: a different file landing is not this wait ending. */
@@ -95,7 +115,15 @@ class DownloadFollowTest {
 
     @Test
     fun landedWinsOverAReplacementThatStartedAfterwards() {
-        val state = LocalModelState(downloaded = setOf(parakeet), downloading = tiny)
+        val state = LocalModelState(downloaded = setOf(parakeet), downloading = tiny, pendingUse = null)
         assertEquals(DownloadOutcome.LANDED, downloadOutcome(state, parakeet))
+    }
+
+    // --- the download service ------------------------------------------------
+
+    @Test
+    fun theServiceStopsExactlyWhenNothingIsDownloading() {
+        assertEquals(true, com.vocahq.vocaphone.local.ModelDownloadService.shouldStop(null))
+        assertEquals(false, com.vocahq.vocaphone.local.ModelDownloadService.shouldStop(parakeet))
     }
 }

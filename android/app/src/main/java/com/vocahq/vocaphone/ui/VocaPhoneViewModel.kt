@@ -26,6 +26,7 @@ import com.vocahq.vocaphone.gateway.GatewayClient
 import com.vocahq.vocaphone.gateway.GatewayException
 import com.vocahq.vocaphone.local.DeviceProfile
 import com.vocahq.vocaphone.local.LocalModelDescriptor
+import com.vocahq.vocaphone.local.ModelDownloadService
 import com.vocahq.vocaphone.local.LocalModelIntegrityException
 import com.vocahq.vocaphone.local.LocalModelState
 import com.vocahq.vocaphone.settings.AudioRetention
@@ -566,6 +567,9 @@ class VocaPhoneViewModel @JvmOverloads constructor(
 
     private fun startLocalModelDownload(model: LocalModelDescriptor, useWhenReady: Boolean) {
         val job = container.localModels.startDownload(model, useWhenReady = useWhenReady)
+        // Keeps the process alive while the person is in system Settings, and
+        // puts progress in the shade. The download itself stays in the manager.
+        ModelDownloadService.start(getApplication(), model.displayName)
         localModelDownloadJob = job
         job.invokeOnCompletion { cause ->
             if (localModelDownloadJob === job) localModelDownloadJob = null

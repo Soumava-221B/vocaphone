@@ -194,8 +194,11 @@ class DictationController(
                         missingPermissions = setOf(repair),
                         modelDownloadProgress = models.progress.takeIf { repair == MissingPermission.MODEL_DOWNLOADING },
                     )
-                    if (repair == MissingPermission.MODEL_DOWNLOADING) {
-                        followDownload(target = models.downloading!!)
+                    val target = models.pendingUse ?: models.downloading
+                    if (target != null &&
+                        (repair == MissingPermission.MODEL_DOWNLOADING || repair == MissingPermission.MODEL_PREPARING)
+                    ) {
+                        followDownload(target = target)
                     }
                     return@launch
                 }
@@ -1083,12 +1086,24 @@ class DictationController(
         val outcome = localModels.state
             .map { latest ->
                 downloadOutcome(latest, target).also {
-                    if (it == DownloadOutcome.WAITING) {
-                        _state.update { state -> state.copy(modelDownloadProgress = latest.progress) }
+                    when (it) {
+                        DownloadOutcome.WAITING -> _state.update { state ->
+                            state.copy(
+                                missingPermissions = setOf(MissingPermission.MODEL_DOWNLOADING),
+                                modelDownloadProgress = latest.progress,
+                            )
+                        }
+                        DownloadOutcome.PREPARING -> _state.update { state ->
+                            state.copy(
+                                missingPermissions = setOf(MissingPermission.MODEL_PREPARING),
+                                modelDownloadProgress = null,
+                            )
+                        }
+                        else -> Unit
                     }
                 }
             }
-            .first { it != DownloadOutcome.WAITING }
+            .first { it != DownloadOutcome.WAITING && it != DownloadOutcome.PREPARING }
         when (outcome) {
             DownloadOutcome.LANDED -> reset()
             DownloadOutcome.DIED -> _state.update {
@@ -1097,7 +1112,7 @@ class DictationController(
                     modelDownloadProgress = null,
                 )
             }
-            DownloadOutcome.WAITING -> Unit
+            DownloadOutcome.WAITING, DownloadOutcome.PREPARING -> Unit
         }
     }
 
@@ -1187,16 +1202,20 @@ internal fun modelRepair(configuredId: String, models: LocalModelState): Missing
     return when {
         configuredId.isNotEmpty() && configuredId in models.downloaded -> null
         target != null && models.downloading == target -> MissingPermission.MODEL_DOWNLOADING
-        target != null && target in models.downloaded -> null
+        // On disk but the id is not persisted: adoption is loading it. A
+        // wait, never a pass — dictating now would read an empty id.
+        target != null && target in models.downloaded && models.pendingUse == target ->
+            MissingPermission.MODEL_PREPARING
         else -> MissingPermission.MODEL_MISSING
     }
 }
 
-internal enum class DownloadOutcome { WAITING, LANDED, DIED }
+internal enum class DownloadOutcome { WAITING, PREPARING, LANDED, DIED }
 
 internal fun downloadOutcome(latest: LocalModelState, target: String): DownloadOutcome =
     when {
-        target in latest.downloaded -> DownloadOutcome.LANDED
-        latest.downloading != target -> DownloadOutcome.DIED
-        else -> DownloadOutcome.WAITING
+        target in latest.downloaded && latest.pendingUse != target -> DownloadOutcome.LANDED
+        target in latest.downloaded -> DownloadOutcome.PREPARING
+        latest.downloading == target -> DownloadOutcome.WAITING
+        else -> DownloadOutcome.DIED
     }

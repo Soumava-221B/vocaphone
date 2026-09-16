@@ -45,6 +45,7 @@ import com.vocahq.vocaphone.R
 import com.vocahq.vocaphone.core.TranscriptionLanguage
 import com.vocahq.vocaphone.local.LocalModelDescriptor
 import com.vocahq.vocaphone.local.LocalModelState
+import com.vocahq.vocaphone.local.downloadProgressLine
 import com.vocahq.vocaphone.settings.VocaPhoneSettings
 import com.vocahq.vocaphone.telemetry.TelemetryInspectPayload
 import kotlinx.coroutines.delay
@@ -62,6 +63,14 @@ internal object SetupCopy {
     const val TITLE = "Set up VocaPhone"
     const val INTRO = "Turn on the keyboard, allow the microphone, then download a model."
     const val START = "Start dictating"
+    const val REVIEW = "Review remaining setup"
+    // The last page while a download-and-use is still in flight. The button
+    // carries the same progress line as the card above it, and the
+    // "preparing" text matches the keyboard's hint for the same second.
+    const val WAITING_TITLE = "Almost there"
+    const val WAITING_DETAIL = "Your model is downloading. Dictation opens as soon as it lands."
+    const val WAITING_DOWNLOADING = "Downloading"
+    const val WAITING_PREPARING = "Preparing model\u2026"
     const val DOWNLOAD = "Download"
     const val DOWNLOAD_AND_CONTINUE = "Download and continue"
     // Named for what they do. "Browse" and "Help me choose" sat side by side
@@ -164,6 +173,7 @@ fun SetupScreen(
     val askUsageReporting = BuildConfig.TELEMETRY && !settings.telemetryAsked
     var askingUsageReporting by remember { mutableStateOf(false) }
     val recentlyReady = rememberRecentlyReadySteps(status)
+    val readyPresentation = readyPagePresentation(status, settings.localTranscriptionEnabled, localModels)
 
     // The saved page is read only once status has loaded (the guard above),
     // because settings arrive with it: reading the stage a frame early would
@@ -252,13 +262,23 @@ fun SetupScreen(
                 )
                 if (stage != OnboardingStage.KEYBOARD_READY) {
                     Text(
-                        if (stage == OnboardingStage.READY && !status.isReadyToDictate) "Let’s get you ready" else stage.title,
+                        when {
+                            stage != OnboardingStage.READY -> stage.title
+                            readyPresentation == ReadyPagePresentation.NEEDS_ATTENTION -> "Let’s get you ready"
+                            readyPresentation == ReadyPagePresentation.WAITING_FOR_MODEL -> SetupCopy.WAITING_TITLE
+                            else -> stage.title
+                        },
                         style = MaterialTheme.typography.headlineLarge,
                         modifier = Modifier.semantics { heading() },
                     )
                     Text(
-                        if (stage == OnboardingStage.READY && !status.isReadyToDictate)
-                            "A permission, keyboard, or speech source needs attention." else stage.detail,
+                        when {
+                            stage != OnboardingStage.READY -> stage.detail
+                            readyPresentation == ReadyPagePresentation.NEEDS_ATTENTION ->
+                                "A permission, keyboard, or speech source needs attention."
+                            readyPresentation == ReadyPagePresentation.WAITING_FOR_MODEL -> SetupCopy.WAITING_DETAIL
+                            else -> stage.detail
+                        },
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -367,7 +387,9 @@ fun SetupScreen(
                     if (settings.localTranscriptionEnabled && localModels.downloading != null) {
                         ModelDownloadCard(state = localModels, onCancelDownload = onCancelLocalModelDownload)
                     }
-                    if (status.isReadyToDictate) {
+                    // Nothing to try while the model is on its way: the
+                    // keyboard would only say "downloading" back.
+                    if (readyPresentation == ReadyPagePresentation.READY) {
                         Notice {
                             Text("Try your keyboard", style = MaterialTheme.typography.titleMedium)
                             Text("Tap the field below to bring up VocaPhone, then tap the microphone and speak. Finish recording and your words appear in the field.")
@@ -396,7 +418,7 @@ fun SetupScreen(
                         Text("Practice is optional. You can also start with the dictation screen.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
+                    } else if (readyPresentation == ReadyPagePresentation.NEEDS_ATTENTION) {
                         Notice { Text("A setup requirement changed. Review it before you start dictating.") }
                     }
                 }
@@ -426,9 +448,16 @@ fun SetupScreen(
                     text = when (stage) {
                         OnboardingStage.WELCOME -> "Get started"
                         OnboardingStage.SOURCE -> "Next"
-                        OnboardingStage.READY -> if (status.isReadyToDictate) SetupCopy.START else "Review remaining setup"
+                        OnboardingStage.READY -> readyPageButtonLabel(
+                            readyPresentation,
+                            localModels.takeIf { it.downloading != null }?.let(::downloadProgressLine),
+                        )
                         else -> "Continue"
                     },
+                    // Greyed, not hidden: the label is where the progress
+                    // reads, and a button that comes back on its own says
+                    // "wait here" better than an empty bar would.
+                    enabled = stage != OnboardingStage.READY || readyPresentation != ReadyPagePresentation.WAITING_FOR_MODEL,
                     onClick = {
                         if (stage != OnboardingStage.READY) advance()
                         else if (!status.isReadyToDictate) stage = OnboardingStage.firstUnmet(status)

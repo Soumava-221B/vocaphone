@@ -44,4 +44,9 @@ class DictationRepairHintTest {
     fun theNewRepairsHaveTitlesForTheRepairScreen() {
         MissingPermission.entries.forEach { assert(it.title.isNotBlank()) { it.name } }
     }
+
+    @Test
+    fun aModelBeingPreparedSaysSoRatherThanAHundredPercent() {
+        assertEquals("Preparing model…", repair(MissingPermission.MODEL_PREPARING).repairHint)
+    }
 }

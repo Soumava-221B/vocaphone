@@ -41,6 +41,7 @@ enum class MissingPermission {
     NOTIFICATIONS,
     GATEWAY_NOT_CONFIGURED,
     MODEL_DOWNLOADING,
+    MODEL_PREPARING,
     MODEL_MISSING,
     ;
 
@@ -50,6 +51,7 @@ enum class MissingPermission {
             NOTIFICATIONS -> "Notifications"
             GATEWAY_NOT_CONFIGURED -> "Gateway address and token"
             MODEL_DOWNLOADING -> "Model download"
+            MODEL_PREPARING -> "Model preparation"
             MODEL_MISSING -> "On-device model"
         }
 }
@@ -117,6 +119,7 @@ data class DictationState(
 
     val repairHint: String
         get() = when {
+            MissingPermission.MODEL_PREPARING in missingPermissions -> "Preparing model…"
             MissingPermission.MODEL_DOWNLOADING in missingPermissions ->
                 modelDownloadProgress?.let { "Model downloading · $it%" } ?: "Model downloading"
             MissingPermission.MODEL_MISSING in missingPermissions -> "Open VocaPhone to choose a model"
