@@ -23,34 +23,62 @@ class DownloadFollowTest {
 
     // --- modelRepair: why dictation cannot start -----------------------------
 
+    /** Present the way the controller reads it once `downloaded` is filled in. */
+    private fun repair(id: String, state: LocalModelState, present: Boolean = id.isNotEmpty() && id in state.downloaded) =
+        modelRepair(configuredId = id, configuredPresent = present, models = state)
+
+    @Test
+    fun aModelFoundOnDiskBeforeTheLaunchRefreshNeedsNoRepair() {
+        // Right after launch `downloaded` can still be empty; the controller's
+        // stat pass is what says the files are there.
+        assertNull(repair(parakeet, LocalModelState(), present = true))
+    }
+
+    @Test
+    fun aModelNotOnThePhoneButDownloadingIsAWaitNotUnavailable() {
+        // The merge regression this signature exists for: a stored model that
+        // is not on disk yet reads as "unavailable" unless its own download is
+        // checked first.
+        val state = LocalModelState(downloading = parakeet, pendingUse = parakeet, progress = 12)
+        assertEquals(MissingPermission.MODEL_DOWNLOADING, repair(parakeet, state, present = false))
+    }
+
+    @Test
+    fun aRetiredSelectionWithNothingComingIsUnavailable() {
+        assertEquals(
+            MissingPermission.LOCAL_MODEL_UNAVAILABLE,
+            repair("retired-model", LocalModelState(), present = false),
+        )
+    }
+
     @Test
     fun aConfiguredModelOnDiskNeedsNoRepair() {
-        assertNull(modelRepair(parakeet, LocalModelState(downloaded = setOf(parakeet))))
+        assertNull(repair(parakeet, LocalModelState(downloaded = setOf(parakeet))))
     }
 
     @Test
     fun theDownloadTheAppIntendsToUseIsAWait() {
         val state = LocalModelState(downloading = parakeet, pendingUse = parakeet, progress = 40)
-        assertEquals(MissingPermission.MODEL_DOWNLOADING, modelRepair("", state))
+        assertEquals(MissingPermission.MODEL_DOWNLOADING, repair("", state))
     }
 
     @Test
     fun theConfiguredModelReDownloadingIsAWaitToo() {
         val state = LocalModelState(downloading = parakeet)
-        assertEquals(MissingPermission.MODEL_DOWNLOADING, modelRepair(parakeet, state))
+        assertEquals(MissingPermission.MODEL_DOWNLOADING, repair(parakeet, state))
     }
 
     @Test
     fun aPendingModelOnDiskButNotYetChosenIsStillAWait() {
         val state = LocalModelState(downloaded = setOf(parakeet), pendingUse = parakeet)
-        assertEquals(MissingPermission.MODEL_PREPARING, modelRepair("", state))
+        assertEquals(MissingPermission.MODEL_PREPARING, repair("", state))
     }
 
     /** Once adopted — id persisted, pending cleared — the first arm passes it. */
     @Test
     fun anAdoptedModelNeedsNoRepair() {
         val state = LocalModelState(downloaded = setOf(parakeet), pendingUse = null)
-        assertNull(modelRepair(parakeet, state))
+        assertNull(repair(parakeet, state))
     }
 
     /**
@@ -61,13 +89,13 @@ class DownloadFollowTest {
     @Test
     fun anUnrelatedDownloadIsNotAReasonToWait() {
         val state = LocalModelState(downloading = tiny, progress = 30)
-        assertEquals(MissingPermission.MODEL_MISSING, modelRepair(parakeet, state))
+        assertEquals(MissingPermission.LOCAL_MODEL_UNAVAILABLE, repair(parakeet, state))
     }
 
     @Test
     fun nothingConfiguredAndNothingComingIsMissing() {
-        assertEquals(MissingPermission.MODEL_MISSING, modelRepair("", LocalModelState()))
-        assertEquals(MissingPermission.MODEL_MISSING, modelRepair(parakeet, LocalModelState(downloaded = setOf(tiny))))
+        assertEquals(MissingPermission.LOCAL_MODEL_UNAVAILABLE, repair("", LocalModelState()))
+        assertEquals(MissingPermission.LOCAL_MODEL_UNAVAILABLE, repair(parakeet, LocalModelState(downloaded = setOf(tiny))))
     }
 
     // --- downloadOutcome: how the wait ends ---------------------------------

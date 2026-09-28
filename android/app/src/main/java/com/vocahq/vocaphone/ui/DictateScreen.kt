@@ -244,7 +244,7 @@ fun DictateScreen(
                 // used to do nothing visible at all. Say the same thing the
                 // keyboard says.
                 if (state.phase == DictationPhase.PERMISSION_REPAIR && state.missingPermissions.any {
-                        it == MissingPermission.MODEL_DOWNLOADING || it == MissingPermission.MODEL_MISSING
+                        it == MissingPermission.MODEL_DOWNLOADING || it == MissingPermission.LOCAL_MODEL_UNAVAILABLE
                     }
                 ) {
                     Notice { Text(state.repairHint) }

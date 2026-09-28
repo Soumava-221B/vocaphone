@@ -15,6 +15,7 @@ import com.vocahq.vocaphone.audio.MicrophoneInterruption
 import com.vocahq.vocaphone.audio.PcmConversion
 import com.vocahq.vocaphone.audio.SilentCapture
 import com.vocahq.vocaphone.audio.WavWriter
+import com.vocahq.vocaphone.core.CustomVocabulary
 import com.vocahq.vocaphone.core.DictatedTranscript
 import com.vocahq.vocaphone.core.DictationFailure
 import com.vocahq.vocaphone.core.DictationPhase
@@ -22,6 +23,7 @@ import com.vocahq.vocaphone.core.DictationState
 import com.vocahq.vocaphone.core.DictationTone
 import com.vocahq.vocaphone.core.MissingPermission
 import com.vocahq.vocaphone.core.ModelLanguageSupport
+import com.vocahq.vocaphone.core.PauseDetector
 import com.vocahq.vocaphone.core.SnippetExpander
 import com.vocahq.vocaphone.data.HistoryRepository
 import com.vocahq.vocaphone.data.UsageStatsRepository
@@ -95,6 +97,21 @@ class DictationController(
     private val cues: DictationTonePlayer,
     private val usageStats: UsageStatsRepository,
     private val scope: CoroutineScope,
+    /**
+     * Suspends until one-time settings migration has finished.
+     *
+     * The retired-model migration runs in a coroutine launched from the
+     * application container, while this controller is constructed
+     * synchronously beside it and the keyboard can ask for a dictation as soon
+     * as the process is up. Without this the first dictation after an upgrade
+     * can read the pre-migration settings -- a retired model id with on-device
+     * transcription still enabled -- pass the permission gate, record, and then
+     * fail at `deliverLocal` on an id that is no longer in the catalog.
+     *
+     * Awaiting costs nothing once the migration has completed, which is every
+     * launch but the first after an upgrade.
+     */
+    private val awaitSettingsMigration: suspend () -> Unit = {},
 ) {
     private val _state = MutableStateFlow(DictationState())
     val state: StateFlow<DictationState> = _state.asStateFlow()
@@ -165,6 +182,7 @@ class DictationController(
         cancelRequested = false
         val generation = nextGeneration()
         pipeline = scope.launch {
+            awaitSettingsMigration()
             val configuration = settings.current()
             val missing = missingPermissions(configuration)
             if (missing.isNotEmpty()) {
@@ -186,7 +204,11 @@ class DictationController(
             }
             if (configuration.localTranscriptionEnabled) {
                 val models = localModels.state.value
-                val repair = modelRepair(configuration.localModelId, models)
+                val repair = modelRepair(
+                    configuredId = configuration.localModelId,
+                    configuredPresent = !localModelUnavailable(configuration),
+                    models = models,
+                )
                 if (repair != null) {
                     diagnostics.recordError("setup", source.name)
                     _state.value = DictationState(
@@ -247,7 +269,19 @@ class DictationController(
                 lingerThenIdle(id, DictationPhase.FAILED, FAILED_LINGER_MILLIS)
                 return@launch
             }
+            // The same two guards as `start`. A recording kept across an upgrade
+            // can be retried before the retired-model migration has run, and a
+            // retry against a model that is not on the phone fails again every
+            // time -- recoverably, so it could be retried forever.
+            awaitSettingsMigration()
             val configuration = settings.current()
+            if (localModelUnavailable(configuration)) {
+                _state.value = DictationState(
+                    phase = DictationPhase.PERMISSION_REPAIR,
+                    missingPermissions = setOf(MissingPermission.LOCAL_MODEL_UNAVAILABLE),
+                )
+                return@launch
+            }
             _state.value = DictationState(
                 sessionId = UUID.fromString(sessionId),
                 phase = DictationPhase.UPLOADING,
@@ -306,6 +340,11 @@ class DictationController(
             add(MissingPermission.GATEWAY_NOT_CONFIGURED)
         }
     }
+
+    private fun localModelUnavailable(configuration: VocaPhoneSettings): Boolean =
+        configuration.localModelMissing ||
+            (configuration.localTranscriptionEnabled &&
+                !localModels.modelFilesPresent(configuration.localModelId))
 
     private fun hasPermission(permission: String) =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
@@ -480,6 +519,7 @@ class DictationController(
         // Frames are drained off the capture thread: file writes and socket sends
         // must never stall the AudioRecord read loop.
         val heardSomething = AtomicBoolean(false)
+        val pauseDetector = if (configuration.stopAfterPause) PauseDetector() else null
         val drain = scope.launch(Dispatchers.IO) {
             for (frame in frames) {
                 writer.write(frame, frame.size)
@@ -491,6 +531,14 @@ class DictationController(
                     heardSomething.set(true)
                 }
                 val level = PcmConversion.level(frame, frame.size)
+                // Stop after a pause: the same finish a tap on Stop sends.
+                // `finish` completes a signal, so a second call is harmless.
+                if (pauseDetector?.observe(level, frame.size.toDouble() / CaptureFormat.SAMPLE_RATE) == true &&
+                    _state.value.phase == DictationPhase.LISTENING
+                ) {
+                    diagnostics.recordAction("stop_after_pause", source.name)
+                    finish()
+                }
                 _state.update { current ->
                     if (current.phase != DictationPhase.LISTENING) {
                         current
@@ -728,6 +776,8 @@ class DictationController(
                 numbersAsDigits = configuration.numbersAsDigits,
                 spokenEmoji = configuration.spokenEmoji,
                 snippets = configuration.snippets,
+                vocabulary = CustomVocabulary.terms(configuration.whisperVocabulary),
+                isDictionaryWord = ::isEnglishWord,
             )
             if (transcript != null && cleaned.isEmpty()) {
                 wavFile.delete()
@@ -822,6 +872,8 @@ class DictationController(
                 numbersAsDigits = configuration.numbersAsDigits,
                 spokenEmoji = configuration.spokenEmoji,
                 snippets = configuration.snippets,
+                vocabulary = CustomVocabulary.terms(configuration.whisperVocabulary),
+                isDictionaryWord = ::isEnglishWord,
             )
             if (transcript.isEmpty()) {
                 throw GatewayException(
@@ -930,7 +982,23 @@ class DictationController(
         numbersAsDigits = configuration.numbersAsDigits,
         spokenEmoji = configuration.spokenEmoji,
         snippets = configuration.snippets,
+        vocabulary = CustomVocabulary.terms(configuration.whisperVocabulary),
+        isDictionaryWord = ::isEnglishWord,
     )
+
+    /**
+     * The keyboard's shipped word list, for vocabulary correction's one
+     * question: is this an ordinary word? Read once, on first use.
+     */
+    private val englishWords: Set<String> by lazy {
+        runCatching {
+            context.assets.open("en.txt").bufferedReader().useLines { lines ->
+                lines.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toHashSet()
+            }
+        }.getOrDefault(emptySet())
+    }
+
+    private fun isEnglishWord(word: String): Boolean = word in englishWords
 
     private suspend fun deliver(
         transcript: String,
@@ -1108,7 +1176,7 @@ class DictationController(
             DownloadOutcome.LANDED -> reset()
             DownloadOutcome.DIED -> _state.update {
                 it.copy(
-                    missingPermissions = setOf(MissingPermission.MODEL_MISSING),
+                    missingPermissions = setOf(MissingPermission.LOCAL_MODEL_UNAVAILABLE),
                     modelDownloadProgress = null,
                 )
             }
@@ -1197,16 +1265,32 @@ class DictationController(
     }
 }
 
-internal fun modelRepair(configuredId: String, models: LocalModelState): MissingPermission? {
+/**
+ * Whether the local route can run now, and if not, what the person is
+ * waiting for. This is the one place that checks the stored model before the
+ * microphone opens: without it a selection the catalog no longer has — or the
+ * replacement the retired-model migration moved it to, which is in the
+ * catalog but not on this phone yet — records a full dictation and fails at
+ * delivery. A download or adoption of the model under way is a wait, not a
+ * missing model, so it is checked before "unavailable".
+ *
+ * [configuredPresent] is a stat pass rather than [LocalModelState.downloaded],
+ * which may not be filled in yet right after launch.
+ */
+internal fun modelRepair(
+    configuredId: String,
+    configuredPresent: Boolean,
+    models: LocalModelState,
+): MissingPermission? {
     val target = models.pendingUse ?: configuredId.takeIf { it.isNotEmpty() }
     return when {
-        configuredId.isNotEmpty() && configuredId in models.downloaded -> null
+        configuredPresent -> null
         target != null && models.downloading == target -> MissingPermission.MODEL_DOWNLOADING
         // On disk but the id is not persisted: adoption is loading it. A
         // wait, never a pass — dictating now would read an empty id.
         target != null && target in models.downloaded && models.pendingUse == target ->
             MissingPermission.MODEL_PREPARING
-        else -> MissingPermission.MODEL_MISSING
+        else -> MissingPermission.LOCAL_MODEL_UNAVAILABLE
     }
 }
 

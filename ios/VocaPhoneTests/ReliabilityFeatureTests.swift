@@ -402,6 +402,100 @@ struct ReliabilityFeatureTests {
         #expect(!contents.localizedCaseInsensitiveContains("gatewayURL"))
     }
 
+    @Test func localEngineFailureRecordsNumbersNotMessages() throws {
+        let underlying = NSError(
+            domain: NSPOSIXErrorDomain,
+            code: 12,
+            userInfo: [NSLocalizedDescriptionKey: "secret-underlying-message"]
+        )
+        let error = NSError(
+            domain: "com.apple.CoreML",
+            code: 0,
+            userInfo: [
+                NSLocalizedDescriptionKey: "secret-outer-message /private/var/model",
+                NSUnderlyingErrorKey: underlying,
+            ]
+        )
+        let metadata = DiagnosticMetadata.localEngineFailure(
+            .localEngineLoadFailed,
+            underlying: error,
+            appInForeground: false,
+            megabytesAvailable: 812
+        )
+        #expect(metadata.errorDomain == .coreML)
+        #expect(metadata.errorNumber == 0)
+        #expect(metadata.underlyingErrorDomain == .posix)
+        #expect(metadata.underlyingErrorNumber == 12)
+        #expect(metadata.appInForeground == false)
+
+        let encoded = String(
+            decoding: try JSONEncoder().encode(
+                DiagnosticEntry(source: .tests, event: .operationFailed, metadata: metadata)
+            ),
+            as: UTF8.self
+        )
+        #expect(encoded.contains("localEngineLoadFailed"))
+        #expect(!encoded.contains("secret"))
+        #expect(!encoded.contains("/private"))
+        #expect(!encoded.contains("com.apple"))
+    }
+
+    @Test func errorWithoutAnUnderlyingCauseRecordsOnlyItself() {
+        let metadata = DiagnosticMetadata.localEngineFailure(
+            .localDecodeFailed,
+            underlying: CancellationError(),
+            appInForeground: true,
+            megabytesAvailable: 1
+        )
+        #expect(metadata.errorDomain == .cancellation)
+        #expect(metadata.underlyingErrorDomain == nil)
+        #expect(metadata.underlyingErrorNumber == nil)
+    }
+
+    @Test func emptyWindowRecordsOnlyWhereAndHowLong() throws {
+        let entry = DiagnosticEntry(
+            source: .tests,
+            event: .localWindowEmpty,
+            metadata: .emptyWindow(index: 0, count: 2, milliseconds: 29_500)
+        )
+        let encoded = String(decoding: try JSONEncoder().encode(entry), as: UTF8.self)
+        #expect(encoded.contains(#""event":"localWindowEmpty""#))
+        #expect(encoded.contains(#""windowIndex":0"#))
+        #expect(encoded.contains(#""windowCount":2"#))
+        #expect(encoded.contains(#""milliseconds":29500"#))
+        let decoded = try JSONDecoder().decode(DiagnosticEntry.self, from: Data(encoded.utf8))
+        #expect(decoded.metadata == .emptyWindow(index: 0, count: 2, milliseconds: 29_500))
+    }
+
+    @Test func sherpaDecodeFailureRecordsTheNativeStatus() {
+        let named = DiagnosticMetadata.sherpaDecodeFailure(
+            .outputTruncated, appInForeground: false, megabytesAvailable: 300
+        )
+        #expect(named.errorCode == .localDecodeFailed)
+        #expect(named.errorDomain == .sherpa)
+        #expect(named.errorNumber == -4)
+        #expect(SherpaNativeFailure.forStatus(-4).status == -4)
+
+        let unnamed = DiagnosticMetadata.sherpaDecodeFailure(
+            .forStatus(-99), appInForeground: true, megabytesAvailable: 300
+        )
+        #expect(unnamed.errorDomain == .sherpa)
+        #expect(unnamed.errorNumber == nil)
+    }
+
+    @Test func entriesWrittenBeforeTheErrorFieldsStillDecode() throws {
+        let legacy = """
+        {"appVersion":"1.0","buildNumber":"1","event":"operationFailed",\
+        "metadata":{"errorCode":"transcriptionFailed"},"schemaVersion":1,\
+        "source":"app","timestamp":"2026-09-01T00:00:00Z"}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let entry = try decoder.decode(DiagnosticEntry.self, from: Data(legacy.utf8))
+        #expect(entry.metadata.errorCode == .transcriptionFailed)
+        #expect(entry.metadata.errorDomain == nil)
+    }
+
     @Test func diagnosticExportDropsEntriesOlderThanSevenDays() throws {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let encoder = JSONEncoder()
@@ -440,6 +534,33 @@ struct ReliabilityFeatureTests {
         )
 
         let size = try #require(file.resourceValues(forKeys: [.fileSizeKey]).fileSize)
-        #expect(size <= DiagnosticLog.maximumFileSize)
+        #expect(size <= DiagnosticLog.trimmedFileSize)
+    }
+
+    /// A full log used to be read and rewritten whole for every line after it
+    /// first reached the cap. A trim now leaves room, so the next line appends.
+    @Test func aTrimLeavesRoomForTheLinesAfterIt() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("diagnostics.ndjson")
+        let line = Data((String(repeating: "x", count: 99) + "\n").utf8)
+        var contents = Data()
+        while contents.count <= DiagnosticLog.maximumFileSize { contents.append(line) }
+        try contents.write(to: file)
+
+        let entry = DiagnosticEntry(source: .tests, event: .appStarted)
+        DiagnosticLog.append(entry, to: file)
+        let trimmed = try #require(FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int)
+        #expect(trimmed <= DiagnosticLog.trimmedFileSize)
+
+        DiagnosticLog.append(entry, to: file)
+        let appended = try #require(FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int)
+        #expect(appended > trimmed)
+        let text = try String(contentsOf: file, encoding: .utf8)
+        #expect(text.components(separatedBy: "appStarted").count - 1 == 2)
+        // Whole lines only: the trim cuts at a newline.
+        #expect(text.hasPrefix("x"))
     }
 }

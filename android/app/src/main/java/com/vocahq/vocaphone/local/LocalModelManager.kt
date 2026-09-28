@@ -93,6 +93,40 @@ const val CANCEL_MODEL_DOWNLOAD_WHEN_HOST_LEAVES = false
  */
 internal const val LOCAL_ENGINE_IDLE_UNLOAD_MS = 2 * 60 * 1000L
 
+/**
+ * How long weights loaded *ahead* of a dictation stay when none comes. Longer
+ * than [LOCAL_ENGINE_IDLE_UNLOAD_MS] because the load is aimed at a screen the
+ * user is still reading — setup's Ready page, a model just chosen — and still
+ * bounded, because until a dictation starts the load is only a guess.
+ */
+internal const val LOCAL_ENGINE_WARM_UNLOAD_MS = 5 * 60 * 1000L
+
+/** Left over after a speculative load: the keyboard, the recorder, the phone. */
+internal const val LOCAL_ENGINE_WARM_HEADROOM_BYTES = 512L * 1024 * 1024
+
+/**
+ * Whether loading a model before anyone asked for it is worth the memory.
+ *
+ * A dictation loads regardless, because then the model is needed. A warm-up
+ * is a guess, and a wrong guess on a phone that is already short gets the app
+ * or the user's other apps killed — far worse than the seconds it would save.
+ * [residentBytes] is a model already loaded that this one replaces: engines
+ * are released before the next is built. Zero [availableBytes] means the
+ * system would not say, which is not a reason to refuse.
+ */
+internal fun hasRoomToWarm(
+    availableBytes: Long,
+    thresholdBytes: Long,
+    lowMemory: Boolean,
+    modelBytes: Long,
+    residentBytes: Long = 0,
+): Boolean {
+    if (lowMemory) return false
+    if (availableBytes <= 0L) return true
+    val usable = availableBytes - thresholdBytes.coerceAtLeast(0) + residentBytes.coerceAtLeast(0)
+    return usable >= modelBytes.coerceAtLeast(0) + LOCAL_ENGINE_WARM_HEADROOM_BYTES
+}
+
 internal fun idleEngineUnloadDue(
     users: Int,
     lastIdleAtMs: Long,
@@ -123,7 +157,7 @@ class LocalModelManager(
     private val totalRamGB: Long by lazy {
         val info = ActivityManager.MemoryInfo()
         appContext.getSystemService(ActivityManager::class.java)?.getMemoryInfo(info)
-        info.totalMem / (1024L * 1024L * 1024L)
+        DeviceMemory.advertisedGB(info.totalMem)
     }
     private var whisperContext: WhisperContext? = null
     private var sherpaRecognizer: SherpaRecognizer? = null
@@ -173,6 +207,7 @@ class LocalModelManager(
             meteredNetwork = appContext.isOnMeteredNetwork(),
         )
         migrateLegacyLayout()
+        deleteRetiredModelFiles()
         val verified = mutableSetOf<String>()
         val pending = mutableListOf<LocalModelDescriptor>()
         LocalModelCatalog.all.forEach { model ->
@@ -221,6 +256,31 @@ class LocalModelManager(
             }
     }
 
+    /**
+     * Reclaim the disk a model still occupies after leaving the catalog.
+     *
+     * Nothing else will: every sweep in here iterates [LocalModelCatalog.all],
+     * and the picker only ever lists catalog rows, so a removed model's files
+     * become unreachable rather than deleted -- and these are not small. A
+     * phone that had collected Whisper Medium and Large v2 is holding three
+     * gigabytes it can no longer see, let alone free.
+     *
+     * Deletes only ids [RetiredModels] names, never "anything not in the
+     * catalog": a directory this build does not recognise may belong to a newer
+     * one the user downgraded from, and guessing there would delete a model
+     * they are about to want back.
+     */
+    private fun deleteRetiredModelFiles() {
+        RetiredModels.replacements.keys.forEach { id ->
+            if (LocalModelCatalog.find(id) != null) return@forEach
+            File(modelRoot, id).takeIf(File::isDirectory)?.deleteRecursively()
+            // Whisper models predating the per-model directory sat in the root
+            // as bare GGML files, and `migrateLegacyLayout` only relocates the
+            // ones still in the catalog.
+            File(modelRoot, "ggml-$id.bin").takeIf(File::isFile)?.delete()
+        }
+    }
+
     fun totalRamGB(): Long = totalRamGB
 
     fun isDownloaded(id: String): Boolean = id in _state.value.downloaded
@@ -230,6 +290,24 @@ class LocalModelManager(
     fun isDownloadingAny(): Boolean = _state.value.downloading != null
 
     fun hasPendingUse(): Boolean = _state.value.pendingUse != null
+
+    /**
+     * Whether every pinned file of [id] is on disk at its pinned size.
+     *
+     * A stat pass, not verification, and deliberately so: it answers "can this
+     * dictation possibly succeed" at the moment one starts, which may be before
+     * the launch [refresh] has filled [LocalModelState.downloaded] in. A model
+     * that is present but later fails its digest check is still caught at
+     * load time; what this rules out is recording a whole dictation for a
+     * model that is not there at all.
+     */
+    fun modelFilesPresent(id: String): Boolean {
+        if (id in _state.value.downloaded) return true
+        val model = LocalModelCatalog.find(id) ?: return false
+        return runCatching {
+            LocalModelIntegrity.verifySizes(model, directoryFor(model), requireMarker = false)
+        }.isSuccess
+    }
 
     fun directoryFor(model: LocalModelDescriptor): File = File(modelRoot, model.id)
 
@@ -497,13 +575,54 @@ class LocalModelManager(
         }
     }
 
+    /**
+     * Loads a model ahead of a dictation nobody has started yet, if the phone
+     * has room for it (see [hasRoomToWarm]), and lets it go again after
+     * [unloadAfterMs] if no dictation claims it. A dictation that starts while
+     * this is still loading joins it through [engineMutex].
+     */
+    fun warmAhead(
+        modelID: String,
+        language: String,
+        quality: TranscriptionQuality,
+        translateTo: String,
+        unloadAfterMs: Long = LOCAL_ENGINE_WARM_UNLOAD_MS,
+    ) {
+        val model = LocalModelCatalog.find(modelID) ?: return
+        if (!isDownloaded(model.id)) return
+        val resident = loadedModelID?.let(LocalModelCatalog::find)?.sizeBytes ?: 0L
+        val memory = ActivityManager.MemoryInfo()
+        appContext.getSystemService(ActivityManager::class.java)?.getMemoryInfo(memory)
+        val room = hasRoomToWarm(
+            availableBytes = memory.availMem,
+            thresholdBytes = memory.threshold,
+            lowMemory = memory.lowMemory,
+            modelBytes = model.sizeBytes,
+            residentBytes = resident,
+        )
+        if (!room) return
+        cancelIdleUnload()
+        engineScope.launch {
+            runCatching { prepare(modelID, language, quality, translateTo) }
+            unloadWhenIdle(unloadAfterMs)
+        }
+    }
+
+    /**
+     * Schedules the weights to be released after [afterMs] unless a dictation
+     * is using them. For loads made ahead of a dictation, which would otherwise
+     * stay resident until the system asked for the memory back.
+     */
+    fun unloadWhenIdle(afterMs: Long = LOCAL_ENGINE_WARM_UNLOAD_MS) {
+        if (engineUsers.get() > 0) return
+        scheduleIdleUnload(afterMs)
+    }
+
     /** Drop native weights now if nothing is dictating. Used on memory trim. */
     fun releaseIfIdle() {
         if (engineUsers.get() > 0) return
         cancelIdleUnload()
-        engineScope.launch {
-            engineMutex.withLock { releaseEngines() }
-        }
+        engineScope.launch { releaseEnginesIfUnused() }
     }
 
     private fun scheduleIdleUnload(idleMs: Long) {
@@ -512,8 +631,21 @@ class LocalModelManager(
         idleUnloadJob = engineScope.launch {
             if (idleMs > 0L) delay(idleMs)
             if (engineUsers.get() > 0) return@launch
-            engineMutex.withLock { releaseEngines() }
+            releaseEnginesIfUnused()
         }
+    }
+
+    /**
+     * Checked again under the lock. An unload that passed the first check can
+     * wait on [engineMutex] behind a load, and by the time it gets the lock a
+     * dictation may own the engine: freeing it between that dictation's
+     * [prepareEngine] and [decodePrepared] fails the decode with "engine
+     * changed before inference started" — a first dictation that fails and a
+     * retry that works.
+     */
+    private suspend fun releaseEnginesIfUnused() = engineMutex.withLock {
+        if (engineUsers.get() > 0) return@withLock
+        releaseEngines()
     }
 
     private fun cancelIdleUnload() {

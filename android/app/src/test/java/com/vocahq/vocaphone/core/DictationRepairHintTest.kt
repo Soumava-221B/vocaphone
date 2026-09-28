@@ -29,8 +29,20 @@ class DictationRepairHintTest {
     }
 
     @Test
-    fun aMissingModelSendsThePersonToChooseOne() {
-        assertEquals("Open VocaPhone to choose a model", repair(MissingPermission.MODEL_MISSING).repairHint)
+    fun aMissingModelSendsThePersonToDownloadOne() {
+        assertEquals(
+            "Open VocaPhone to download a voice model",
+            repair(MissingPermission.LOCAL_MODEL_UNAVAILABLE).repairHint,
+        )
+    }
+
+    @Test
+    fun onlyAMissingModelOpensTheModelsPage() {
+        // needsVoiceModel sends the keyboard's tap to Settings → Models; a
+        // download in progress is a wait and must not.
+        assert(repair(MissingPermission.LOCAL_MODEL_UNAVAILABLE).needsVoiceModel)
+        assert(!repair(MissingPermission.MODEL_DOWNLOADING, progress = 12).needsVoiceModel)
+        assert(!repair(MissingPermission.MICROPHONE).needsVoiceModel)
     }
 
     @Test

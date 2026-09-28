@@ -20,6 +20,11 @@ final class RecordingCoordinator {
     /// Levels produced in the current recording, counted so the keyboard can
     /// tell new audio from a re-read of the same file.
     private var meterSequence = 0
+    /// Listens for the end of speech when Stop after a pause is on, reset for
+    /// every recording.
+    private var pauseDetector = PauseDetector()
+    private var pauseDetectorSessionID: UUID?
+    private var pauseDetectorLastBatchAt: TimeInterval?
     /// Guided setup reads system state that emits no change notifications —
     /// keyboard installation, a permission flipped in iOS Settings — so it is
     /// snapshotted here and refreshed deliberately rather than polled.
@@ -878,6 +883,21 @@ final class RecordingCoordinator {
         }
     }
 
+    /// Why on-device transcription cannot run right now, or nil when it can
+    /// (or is not the route). A model still being hashed after launch counts
+    /// as present: it is on disk, and failing a dictation over a check that has
+    /// not finished would be the false alarm this is meant to prevent.
+    private func localModelUnavailableMessage() -> String? {
+        guard LocalTranscriptionPreferences.enabled else { return nil }
+        let id = LocalTranscriptionPreferences.modelIdentifier
+        if let id, LocalModelCatalog.descriptor(for: id) != nil,
+           localModels.isDownloaded(id) || localModels.verifyingModelIDs.contains(id)
+        {
+            return nil
+        }
+        return LocalModelManagerError.modelNotDownloaded(id ?? "none").errorDescription
+    }
+
     private func startSession(id: UUID) async {
         guard startingSessionID == nil || startingSessionID == id else { return }
         guard startingSessionID != id else { return }
@@ -907,6 +927,22 @@ final class RecordingCoordinator {
             try? store.save(record)
             clearQuickDictationMarker()
             activeRecord = record
+            // Before the microphone, not at delivery: a selected model that is
+            // not on this iPhone — most often the replacement the retired-model
+            // migration chose, which still has to be downloaded — would
+            // otherwise record a whole dictation and fail at the end of it.
+            if let unavailable = localModelUnavailableMessage() {
+                try record.transition(to: .transcriptionFailedPermanent)
+                record.error = SessionFailure(
+                    code: "local_model_unavailable",
+                    message: unavailable,
+                    recoverable: false
+                )
+                try store.save(record)
+                activeRecord = record
+                message = unavailable
+                return
+            }
             // Asked only when the answer is not already known. Every dictation
             // paid a cross-process round trip to be told what
             // `AVAudioApplication` had already cached, in the moment between
@@ -1114,6 +1150,15 @@ final class RecordingCoordinator {
     }
 
     private func finalizeAndTranscribe(_ incoming: SessionRecord) async {
+        // Finishing usually runs with this app behind whatever the user is
+        // typing into, and once Quick Dictation stops standing by, the audio
+        // session is released below — after which nothing keeps the process
+        // running. A cold model load takes seconds, and without this iOS can
+        // suspend it half-way: the first dictation after a quiet spell failed
+        // where the next one, on a model already loaded, succeeded.
+        let backgroundAssertion = BackgroundAssertion(name: "finish-dictation")
+        backgroundAssertion.begin()
+        defer { backgroundAssertion.end() }
         pollingTask?.cancel()
         beginCancellationMonitoring(sessionID: incoming.sessionID)
         defer { cancellationMonitorTask?.cancel() }
@@ -1520,6 +1565,7 @@ final class RecordingCoordinator {
         // draws one bar per level, and the levels it never saw are the motion
         // it used to invent.
         meterSequence += levels.count
+        finishIfSpeechEnded(levels, sessionID: record.sessionID)
         // Meter updates are intentionally stored separately from the session
         // record. Otherwise a stale meter write from the app can overwrite a
         // finalizing/canceled state written by the keyboard extension.
@@ -1527,6 +1573,36 @@ final class RecordingCoordinator {
             MeterSample(sequence: meterSequence, levels: levels),
             for: record.sessionID
         )
+    }
+
+    /// Meter levels are the square root of their RMS (see
+    /// `AudioCapturePipeline.normalizedLevel`); the detector wants the RMS
+    /// back. A batch of levels covers however much audio was drained since the
+    /// last one — the pipeline always splits a drain into five, whatever its
+    /// length — so the time is measured, not assumed: capture is real time, and
+    /// the clock between batches is the audio they hold. Finishing goes through
+    /// ``requestFinish()``, the same path the recording limit takes.
+    private func finishIfSpeechEnded(_ levels: [Float], sessionID: UUID) {
+        guard KeyboardPreferences.stopAfterPause, !levels.isEmpty else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if pauseDetectorSessionID != sessionID {
+            pauseDetector = PauseDetector()
+            pauseDetectorSessionID = sessionID
+            pauseDetectorLastBatchAt = nil
+        }
+        // The first batch has nothing to measure against; a stalled one is
+        // capped, so a suspended app catching up cannot count as a pause.
+        let elapsed = pauseDetectorLastBatchAt.map { min(max(now - $0, 0), 1) } ?? 0.25
+        pauseDetectorLastBatchAt = now
+        let perLevel = elapsed / Double(levels.count)
+        var ended = false
+        for level in levels {
+            let rms = level * level
+            ended = pauseDetector.observe(rms: rms, seconds: perLevel) || ended
+        }
+        guard ended else { return }
+        pauseDetectorSessionID = nil
+        requestFinish()
     }
 
     private func shouldKeepQuickDictationReady(after record: SessionRecord) -> Bool {

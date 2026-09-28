@@ -24,7 +24,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: minimal
-    CURRENT_PROJECT_VERSION: 29
+    CURRENT_PROJECT_VERSION: 30
     MARKETING_VERSION: 1.0
     TARGETED_DEVICE_FAMILY: "1"
     CODE_SIGN_STYLE: Automatic
@@ -37,7 +37,7 @@ settings:
 packages:
   WhisperKit:
     url: https://github.com/argmaxinc/WhisperKit.git
-    from: 0.16.0
+    from: 1.1.0
   sherpa-onnx:
     url: https://github.com/k2-fsa/sherpa-onnx.git
     exactVersion: 1.13.8
@@ -163,9 +163,22 @@ targets:
   VocaPhoneTests:
     type: bundle.unit-test
     platform: iOS
+    dependencies:
+      - package: WhisperKit
+      # The real recognizer and its C bridge, so the model tests can decode
+      # speech with a pinned sherpa model rather than stand a closure in.
+      - package: sherpa-onnx
+        product: sherpa-onnx
     sources:
       - VocaPhoneTests
       - VocaPhoneShared
+      - path: VocaPhoneApp/Models/WhisperTranscription.swift
+      - path: VocaPhoneApp/Models/SherpaRecognizer.swift
+      - path: VocaPhoneApp/Models/SherpaOnnxBridge.c
+      # The errors SherpaRecognizer throws are declared beside the integrity
+      # checks it shares them with.
+      - path: VocaPhoneApp/Models/LocalModelIntegrity.swift
+      - path: VocaPhoneApp/Models/RetiredModelFileCleanup.swift
       # Key geometry is worth regression tests; the controller itself needs a
       # host extension and stays out of the test target.
       - path: VocaPhoneKeyboard/KeyLayout.swift
@@ -223,6 +236,9 @@ targets:
       - path: VocaPhoneKeyboard/TypingStripView.swift
       # The realtime capture path is the highest-risk code in the app.
       - path: VocaPhoneApp/Audio/AudioCapturePipeline.swift
+      # Whether a speech model may be loaded before anyone asked for it: a
+      # wrong answer on a short phone is an out-of-memory kill during setup.
+      - path: VocaPhoneApp/Models/EngineWarmPolicy.swift
       # Guided setup decides what the app claims is done, and every signal it
       # reads can be undone from iOS Settings. The model behind it is pure.
       - path: VocaPhoneApp/App/SetupStatus.swift
@@ -267,6 +283,9 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_OBJC_BRIDGING_HEADER: VocaPhoneApp/Models/SherpaOnnx-Bridging-Header.h
+        HEADER_SEARCH_PATHS: "$(inherited) $(PROJECT_DIR)/VocaPhoneApp/Models"
+        OTHER_LDFLAGS: "$(inherited) -lc++"
 schemes:
   VocaPhone:
     build:

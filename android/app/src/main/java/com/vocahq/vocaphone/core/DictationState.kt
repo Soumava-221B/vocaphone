@@ -42,7 +42,15 @@ enum class MissingPermission {
     GATEWAY_NOT_CONFIGURED,
     MODEL_DOWNLOADING,
     MODEL_PREPARING,
-    MODEL_MISSING,
+
+    /**
+     * On-device transcription is on but the stored model cannot run: it is not
+     * in the catalog (a selection this build no longer ships, or one the launch
+     * migration has not reached yet), or its files are not on this phone and no
+     * download of it is under way. Either way the local route cannot run, and saying so
+     * before the microphone opens is the whole point of this state.
+     */
+    LOCAL_MODEL_UNAVAILABLE,
     ;
 
     val title: String
@@ -52,7 +60,7 @@ enum class MissingPermission {
             GATEWAY_NOT_CONFIGURED -> "Gateway address and token"
             MODEL_DOWNLOADING -> "Model download"
             MODEL_PREPARING -> "Model preparation"
-            MODEL_MISSING -> "On-device model"
+            LOCAL_MODEL_UNAVAILABLE -> "Voice model"
         }
 }
 
@@ -106,8 +114,20 @@ data class DictationState(
             DictationPhase.INSERTING -> "Inserting"
             DictationPhase.INSERTED -> "Inserted"
             DictationPhase.FAILED -> failure?.message ?: "Dictation failed"
-            DictationPhase.PERMISSION_REPAIR -> "Permission needed"
+            DictationPhase.PERMISSION_REPAIR -> repairTitle
         }
+
+    /**
+     * Whether the only thing missing is a voice model on this phone. The
+     * keyboard says so and opens the Models page rather than "Permission
+     * needed", which sent people looking for a permission that was never off.
+     */
+    val needsVoiceModel: Boolean
+        get() = phase == DictationPhase.PERMISSION_REPAIR &&
+            missingPermissions == setOf(MissingPermission.LOCAL_MODEL_UNAVAILABLE)
+
+    private val repairTitle: String
+        get() = if (needsVoiceModel) "Voice model needed" else "Permission needed"
 
     companion object {
         /** Active dictation follows focus across apps, but never past this. */
@@ -122,7 +142,7 @@ data class DictationState(
             MissingPermission.MODEL_PREPARING in missingPermissions -> "Preparing model…"
             MissingPermission.MODEL_DOWNLOADING in missingPermissions ->
                 modelDownloadProgress?.let { "Model downloading · $it%" } ?: "Model downloading"
-            MissingPermission.MODEL_MISSING in missingPermissions -> "Open VocaPhone to choose a model"
+            MissingPermission.LOCAL_MODEL_UNAVAILABLE in missingPermissions -> "Open VocaPhone to download a voice model"
             else -> "Open VocaPhone to finish setup"
         }
 }

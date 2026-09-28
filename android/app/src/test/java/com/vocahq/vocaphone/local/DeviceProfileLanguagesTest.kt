@@ -52,7 +52,7 @@ class DeviceProfileLanguagesTest {
     fun anEnglishPhoneWithARussianKeyboardIsNotOfferedEnglishFirst() {
         val ids = picks(listOf("en", "ru"))
         assertFalse("English-only must not lead", ids.first() == "parakeet-tdt-0.6b-v2-en")
-        assertTrue("the Russian specialist is offered", "giga-am-ctc-ru" in ids)
+        assertTrue("the Russian specialist is offered", "giga-am-v3-ru" in ids)
         assertTrue("the multilingual Parakeet covers both", "parakeet-tdt-0.6b-v3" in ids)
         assertTrue("English-only is still there for the English half", "parakeet-tdt-0.6b-v2-en" in ids)
     }

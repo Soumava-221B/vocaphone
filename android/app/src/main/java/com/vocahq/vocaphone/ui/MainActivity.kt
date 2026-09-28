@@ -174,11 +174,14 @@ fun VocaPhoneApp(
     }
 
     val showSetup = !settings.onboardingComplete && !showingGateway
+    val showingMotionIntro = showSetup && setup.isLoaded && !settings.onboardingIntroSeen
     val imeVisible = WindowInsets.isImeVisible
 
     Scaffold(
+        containerColor = if (showingMotionIntro) Color(0xFF111A15) else MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
+            if (!showingMotionIntro) {
             TopAppBar(
                 colors = if (selectingHistory) {
                     TopAppBarDefaults.topAppBarColors(
@@ -281,6 +284,7 @@ fun VocaPhoneApp(
                     }
                 },
             )
+            }
         },
         bottomBar = {
             if (!showSetup && !showingGateway && !imeVisible) {
@@ -345,7 +349,9 @@ fun VocaPhoneApp(
                 telemetryDeliveryStatus = viewModel::telemetryDeliveryStatus,
                 onFinish = { viewModel.setOnboardingComplete(true) },
                 onStageChange = viewModel::setOnboardingStage,
+                onIntroSeen = viewModel::setOnboardingIntroSeen,
                 onRefreshSetup = viewModel::refreshSetup,
+                onWarmLocalModel = viewModel::warmSelectedLocalModel,
                 modifier = content,
             )
 
@@ -415,6 +421,7 @@ fun VocaPhoneApp(
                 onNumbersAsDigits = { viewModel.setNumbersAsDigits(it) },
                 onSpokenEmoji = { viewModel.setSpokenEmoji(it) },
                 onDictationTone = { viewModel.setDictationTone(it) },
+                onStopAfterPause = { viewModel.setStopAfterPause(it) },
                 onPreviewDictationTone = { viewModel.toggleDictationTonePreview(it) },
                 tonePreviewListening = tonePreviewListening,
                 onMicrophone = { viewModel.setMicrophone(it) },

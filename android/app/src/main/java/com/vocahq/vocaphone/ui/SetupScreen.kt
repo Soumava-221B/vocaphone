@@ -39,6 +39,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.vocahq.vocaphone.BuildConfig
@@ -112,6 +113,9 @@ internal object SetupCopy {
         else -> "In keyboard settings, turn on VocaPhone."
     }
 
+    fun preparingModel(name: String): String =
+        "Loading $name. You can start speaking; your words appear once it's ready."
+
     fun stepReady(step: SetupStep): String = when (step) {
         SetupStep.MICROPHONE -> "Microphone ready"
         SetupStep.NOTIFICATIONS -> "Notifications ready"
@@ -150,7 +154,9 @@ fun SetupScreen(
     telemetryDeliveryStatus: () -> String,
     onFinish: () -> Unit,
     onStageChange: (String) -> Unit,
+    onIntroSeen: () -> Unit,
     onRefreshSetup: () -> Unit,
+    onWarmLocalModel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // Resume from the first real read, not the ViewModel's startup placeholder.
@@ -164,6 +170,10 @@ fun SetupScreen(
             CircularProgressIndicator()
             Text("Checking your setup…", modifier = Modifier.padding(top = 16.dp))
         }
+        return
+    }
+    if (!settings.onboardingIntroSeen) {
+        OnboardingWordFlow(onContinue = onIntroSeen, modifier = modifier)
         return
     }
     val context = LocalContext.current
@@ -212,6 +222,19 @@ fun SetupScreen(
         stage = stage.advance(status, settings.localTranscriptionEnabled)
     }
     BackHandler(enabled = stage != OnboardingStage.WELCOME) { stage = stage.previous() }
+    // Load the model while the user reads the Ready page, and again on every
+    // return to it: leaving the app is when the system takes it back. Without
+    // this the practice dictation carried the whole load. Only once the page
+    // is truly ready: mid-download the stored id is still the old model (or
+    // none), and warming that would compete with the adoption for memory.
+    val resumed = LocalLifecycleOwner.current.lifecycle.currentStateAsState().value
+        .isAtLeast(Lifecycle.State.RESUMED)
+    val warmsModel = stage == OnboardingStage.READY &&
+        readyPresentation == ReadyPagePresentation.READY &&
+        settings.localTranscriptionEnabled && resumed
+    LaunchedEffect(warmsModel, settings.localModelId) {
+        if (warmsModel) onWarmLocalModel()
+    }
 
     Column(
         modifier = modifier.fillMaxSize(),
@@ -319,7 +342,7 @@ fun SetupScreen(
                     WelcomeCard(
                         icon = R.drawable.ic_lock,
                         title = "Your voice stays on this phone",
-                        body = "That's the default. A gateway you run is a separate choice.",
+                        body = "On-device by default. A gateway you run is a separate choice.",
                     )
                     WelcomeCard(
                         icon = R.drawable.ic_infinity,
@@ -345,6 +368,7 @@ fun SetupScreen(
                         LocalModelPicker(
                             state = localModels,
                             selectedModelId = settings.localModelId,
+                            selectionFromRetiredModel = settings.selectionIsRetiredModelReplacement,
                             compact = true,
                             onSelect = onLocalModel,
                             onDownload = onDownloadLocalModel,
@@ -434,6 +458,22 @@ fun SetupScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                         }
+                        // Recording does not wait for the load; the words are
+                        // kept and transcribed once the model is in. So this
+                        // says to start, not to wait.
+                        localModels.preparing?.let { name ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.padding(end = 12.dp).size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Text(
+                                    SetupCopy.preparingModel(name),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                         // Deliberately not saved: this field may contain a private transcript.
                         var practiceText by remember { mutableStateOf("") }
                         OutlinedTextField(
@@ -502,7 +542,8 @@ fun SetupScreen(
             Text(
                 when (stage) {
                     OnboardingStage.READY -> "You can change your setup in Settings."
-                    OnboardingStage.WELCOME, OnboardingStage.KEYBOARD_READY -> ""
+                    OnboardingStage.WELCOME -> "Next, choose how speech becomes text."
+                    OnboardingStage.KEYBOARD_READY -> ""
                     else -> "${status.completedStepCount} of ${status.stepCount} requirements ready. Your progress is kept when you leave."
                 },
                 style = MaterialTheme.typography.bodySmall,

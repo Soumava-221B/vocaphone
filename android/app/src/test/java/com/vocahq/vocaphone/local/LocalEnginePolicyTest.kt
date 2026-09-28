@@ -14,7 +14,7 @@ class LocalEnginePolicyTest {
             shouldReloadLocalEngine(
                 engine = LocalModelEngine.WHISPER,
                 loadedModelID = null,
-                requestedModelID = "small-q5_1",
+                requestedModelID = "small-q8_0",
                 loadedLanguage = null,
                 requestedLanguage = "en",
                 loadedQuality = null,
@@ -28,8 +28,8 @@ class LocalEnginePolicyTest {
         assertFalse(
             shouldReloadLocalEngine(
                 engine = LocalModelEngine.WHISPER,
-                loadedModelID = "small-q5_1",
-                requestedModelID = "small-q5_1",
+                loadedModelID = "small-q8_0",
+                requestedModelID = "small-q8_0",
                 loadedLanguage = "en",
                 requestedLanguage = "hi",
                 loadedQuality = TranscriptionQuality.BALANCED,
@@ -43,8 +43,8 @@ class LocalEnginePolicyTest {
         assertTrue(
             shouldReloadLocalEngine(
                 engine = LocalModelEngine.WHISPER,
-                loadedModelID = "small-q5_1",
-                requestedModelID = "base-q5_1",
+                loadedModelID = "small-q8_0",
+                requestedModelID = "base-q8_0",
                 loadedLanguage = "en",
                 requestedLanguage = "en",
                 loadedQuality = TranscriptionQuality.BALANCED,
@@ -173,5 +173,69 @@ class LocalEnginePolicyTest {
         assertTrue(idleEngineUnloadDue(users = 0, lastIdleAtMs = 0L, nowMs = LOCAL_ENGINE_IDLE_UNLOAD_MS))
         assertTrue(idleEngineUnloadDue(users = 0, lastIdleAtMs = 0L, nowMs = 30_000L, idleMs = 30_000L))
         assertFalse(idleEngineUnloadDue(users = 0, lastIdleAtMs = 0L, nowMs = 10_000L, idleMs = 30_000L))
+    }
+
+    private val mb = 1024L * 1024
+
+    @Test
+    fun `a warm-up loads when the model fits with headroom to spare`() {
+        assertTrue(
+            hasRoomToWarm(
+                availableBytes = 3000 * mb,
+                thresholdBytes = 500 * mb,
+                lowMemory = false,
+                modelBytes = 670 * mb,
+            ),
+        )
+    }
+
+    @Test
+    fun `a warm-up waits when the model would eat the headroom`() {
+        // Fits above the killer threshold, but leaves the keyboard next to
+        // nothing. A dictation would still load it; a guess must not.
+        assertFalse(
+            hasRoomToWarm(
+                availableBytes = 1500 * mb,
+                thresholdBytes = 500 * mb,
+                lowMemory = false,
+                modelBytes = 670 * mb,
+            ),
+        )
+    }
+
+    @Test
+    fun `the engine a warm-up replaces counts as room`() {
+        assertTrue(
+            hasRoomToWarm(
+                availableBytes = 1500 * mb,
+                thresholdBytes = 500 * mb,
+                lowMemory = false,
+                modelBytes = 670 * mb,
+                residentBytes = 600 * mb,
+            ),
+        )
+    }
+
+    @Test
+    fun `a phone the system calls low on memory never warms`() {
+        assertFalse(
+            hasRoomToWarm(
+                availableBytes = 8000 * mb,
+                thresholdBytes = 500 * mb,
+                lowMemory = true,
+                modelBytes = 100 * mb,
+            ),
+        )
+    }
+
+    @Test
+    fun `unknown memory is not a reason to refuse`() {
+        assertTrue(hasRoomToWarm(availableBytes = 0L, thresholdBytes = 0L, lowMemory = false, modelBytes = 670 * mb))
+    }
+
+    @Test
+    fun `a warm-up outlives the idle unload but is still released`() {
+        assertTrue(LOCAL_ENGINE_WARM_UNLOAD_MS > LOCAL_ENGINE_IDLE_UNLOAD_MS)
+        assertTrue(LOCAL_ENGINE_WARM_UNLOAD_MS <= 10 * 60 * 1000L)
     }
 }
